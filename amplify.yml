@@ -10,6 +10,9 @@ frontend:
     postBuild:
       commands:
         - rm -rf .next/cache
+        - rm -rf .next/standalone
+        - rm -rf node_modules/@prisma/engines/*windows*
+        - rm -rf node_modules/@prisma/engines/*darwin*
   artifacts:
     baseDirectory: .next
     files:
