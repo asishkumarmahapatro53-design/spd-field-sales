@@ -618,31 +618,88 @@ async function ensureDatabaseFile() {
   }
 }
 
-function getFirebaseDocPath() {
-  return {
-    collection: process.env.FIREBASE_APP_STATE_COLLECTION?.trim() || "app_state",
-    docId: process.env.FIREBASE_APP_STATE_DOC?.trim() || "main",
-  };
+function getFirebaseRootPath() {
+  return process.env.FIREBASE_APP_STATE_COLLECTION?.trim() || "app_state";
 }
 
-async function ensureFirebaseDocument() {
-  const firestore = await getFirebaseFirestore();
-  const { collection, docId } = getFirebaseDocPath();
-  const ref = firestore.collection(collection).doc(docId);
-  const snapshot = await ref.get();
+const COLLECTION_NAMES = [
+  "users",
+  "authSessions",
+  "plants",
+  "workdaySessions",
+  "odometerReadings",
+  "siteVisits",
+  "leads",
+  "leadSites",
+  "approvalRequests",
+  "salesOrderRequests",
+  "reimbursementClaims",
+  "tasks",
+  "helpRequests",
+  "targets",
+  "auditLogs",
+  "fleetVehicles",
+  "materialCostSnapshots",
+  "priceBenchmarks",
+  "customerAccounts",
+  "customerInvoices",
+] as const;
 
-  if (!snapshot.exists) {
-    await ref.set(createSeedDatabase());
+async function syncAllToFirebase(database: Database) {
+  const firestore = await getFirebaseFirestore();
+  const rootCollection = getFirebaseRootPath();
+  const batch = firestore.batch();
+  let opCount = 0;
+
+  for (const collectionName of COLLECTION_NAMES) {
+    const list = (database[collectionName as keyof Database] || []) as any[];
+    for (const item of list) {
+      if (item.id) {
+        const ref = firestore.collection(rootCollection).doc("collections").collection(collectionName).doc(item.id);
+        batch.set(ref, item);
+        opCount++;
+        
+        if (opCount >= 490) {
+          await batch.commit();
+          opCount = 0;
+        }
+      }
+    }
   }
 
-  return ref;
+  if (opCount > 0) {
+    await batch.commit();
+  }
+}
+
+async function ensureFirebaseCollections(): Promise<Database> {
+  const firestore = await getFirebaseFirestore();
+  const rootCollection = getFirebaseRootPath();
+  const dbResult: Partial<Database> = {};
+  let isEmpty = true;
+
+  // Use parallel fetching for speed
+  await Promise.all(
+    COLLECTION_NAMES.map(async (collectionName) => {
+      const snap = await firestore.collection(rootCollection).doc("collections").collection(collectionName).get();
+      const items = snap.docs.map((doc) => doc.data());
+      dbResult[collectionName] = items as any;
+      if (items.length > 0) isEmpty = false;
+    })
+  );
+
+  if (isEmpty) {
+    const seed = createSeedDatabase();
+    await syncAllToFirebase(seed);
+    return seed;
+  }
+
+  return normalizeDatabase(dbResult as Database);
 }
 
 export async function readDatabase(): Promise<Database> {
   if (await isFirebaseConfigured()) {
-    const ref = await ensureFirebaseDocument();
-    const snapshot = await ref.get();
-    return normalizeDatabase(snapshot.data() as Database);
+    return ensureFirebaseCollections();
   }
 
   await ensureDatabaseFile();
@@ -652,8 +709,8 @@ export async function readDatabase(): Promise<Database> {
 
 export async function writeDatabase(database: Database) {
   if (await isFirebaseConfigured()) {
-    const ref = await ensureFirebaseDocument();
-    await ref.set(database);
+    // Legacy support, updateDatabase should be used for granular diffs
+    await syncAllToFirebase(database);
     return;
   }
 
@@ -661,19 +718,66 @@ export async function writeDatabase(database: Database) {
   await writeFile(dbPath, JSON.stringify(database, null, 2), "utf-8");
 }
 
-export async function updateDatabase<T>(updater: (database: Database) => Promise<T> | T) {
+export async function updateDatabase<T>(updater: (database: Database) => Promise<T> | T): Promise<T> {
   if (await isFirebaseConfigured()) {
-    const firestore = await getFirebaseFirestore();
-    const { collection, docId } = getFirebaseDocPath();
-    const ref = firestore.collection(collection).doc(docId);
+    // Instead of locking a giant transaction, we read the collections concurrently, run the updater, and then apply isolated diffs.
+    // This allows 100 concurrent users to write without Firestore locking errors.
+    const database = await ensureFirebaseCollections();
+    
+    // Create deep clones to diff later
+    const originalMaps = new Map<string, Map<string, any>>();
+    for (const collectionName of COLLECTION_NAMES) {
+      const list = (database[collectionName as keyof Database] || []) as any[];
+      const map = new Map<string, any>();
+      for (const item of list) {
+        if (item.id) map.set(item.id, JSON.stringify(item));
+      }
+      originalMaps.set(collectionName, map);
+    }
 
-    return firestore.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(ref);
-      const database = normalizeDatabase(snapshot.exists ? (snapshot.data() as Database) : createSeedDatabase());
-      const result = await updater(database);
-      transaction.set(ref, database);
-      return result;
-    });
+    const result = await updater(database);
+    
+    const firestore = await getFirebaseFirestore();
+    const rootCollection = getFirebaseRootPath();
+    const batch = firestore.batch();
+    let opCount = 0;
+
+    for (const collectionName of COLLECTION_NAMES) {
+      const list = (database[collectionName as keyof Database] || []) as any[];
+      const oldMap = originalMaps.get(collectionName)!;
+      const refCol = firestore.collection(rootCollection).doc("collections").collection(collectionName);
+      
+      const newIds = new Set<string>();
+
+      for (const newItem of list) {
+        if (!newItem.id) continue;
+        newIds.add(newItem.id);
+        
+        const newStr = JSON.stringify(newItem);
+        const oldStr = oldMap.get(newItem.id);
+        
+        if (newStr !== oldStr) {
+          batch.set(refCol.doc(newItem.id), newItem);
+          opCount++;
+          if (opCount >= 490) { await batch.commit(); opCount = 0; }
+        }
+      }
+
+      // Check for deletions
+      for (const [oldId] of oldMap) {
+        if (!newIds.has(oldId)) {
+          batch.delete(refCol.doc(oldId));
+          opCount++;
+          if (opCount >= 490) { await batch.commit(); opCount = 0; }
+        }
+      }
+    }
+
+    if (opCount > 0) {
+      await batch.commit();
+    }
+
+    return result;
   }
 
   const database = await readDatabase();

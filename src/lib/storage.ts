@@ -2,11 +2,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getFirebaseStorageBucket, isFirebaseConfigured } from "@/lib/firebase-admin";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || "./runtime-uploads");
 
 function shouldUseSupabaseStorage() {
   return process.env.SUPABASE_USE_STORAGE?.trim().toLowerCase() === "true";
+}
+
+function shouldUseS3Storage() {
+  return Boolean(process.env.S3_BUCKET_NAME?.trim());
 }
 
 function shouldUseFirebaseStorage() {
@@ -76,6 +81,38 @@ async function saveToSupabaseStorage(
   };
 }
 
+async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, mimeType: string) {
+  const bucket = process.env.S3_BUCKET_NAME?.trim();
+  const region = process.env.S3_REGION?.trim() || "us-east-1";
+
+  if (!bucket) {
+    throw new Error("S3_BUCKET_NAME is not configured.");
+  }
+
+  const s3 = new S3Client({
+    region,
+    credentials: {
+      accessKeyId: process.env.S3_ACCESS_KEY_ID?.trim() || "",
+      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY?.trim() || "",
+    },
+  });
+
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: bucketPath,
+    Body: new Uint8Array(buffer),
+    ContentType: mimeType,
+  });
+
+  await s3.send(command);
+
+  return {
+    photoUrl: `https://${bucket}.s3.${region}.amazonaws.com/${bucketPath}`,
+    originalFileName: file.name || path.basename(bucketPath),
+    localAbsolutePath: null,
+  };
+}
+
 export async function readUploadedFileBuffer(file: File) {
   const bytes = await file.arrayBuffer();
   return Buffer.from(bytes);
@@ -91,6 +128,10 @@ export async function saveUploadedFile(file: File, buffer?: Buffer) {
   const absolutePath = path.join(absoluteDir, fileName);
   const bucketPath = `uploads/${relativeDir.replaceAll("\\", "/")}/${fileName}`;
   const mimeType = file.type || "application/octet-stream";
+
+  if (shouldUseS3Storage()) {
+    return saveToS3Storage(file, fileBuffer, bucketPath, mimeType);
+  }
 
   if (shouldUseSupabaseStorage()) {
     return saveToSupabaseStorage(file, fileBuffer, bucketPath, mimeType);
