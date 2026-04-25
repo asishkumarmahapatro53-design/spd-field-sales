@@ -1,0 +1,207 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SALES_AGENT
+  MANAGER
+  ACCOUNTING
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum ReadingType {
+  START
+  END
+}
+
+enum ReadingStatus {
+  OCR_PENDING
+  AWAITING_CONFIRMATION
+  CONFIRMED
+  MANUAL_REVIEW_REQUIRED
+  MANUAL_VERIFIED
+}
+
+enum LeadStage {
+  TALKS
+  NEGOTIATING
+  FINALIZED
+  MISSED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TaskStatus {
+  OPEN
+  DONE
+}
+
+enum HelpRequestStatus {
+  OPEN
+  RESOLVED
+}
+
+model User {
+  id             String           @id @default(cuid())
+  employeeId     String           @unique
+  name           String
+  role           UserRole
+  status         UserStatus       @default(ACTIVE)
+  passwordHash   String
+  sessions       WorkdaySession[]
+  targets        Target[]
+  assignedTasks  Task[]           @relation("AssignedTasks")
+  createdTasks   Task[]           @relation("CreatedTasks")
+  decidedApprovals ApprovalRequest[] @relation("ApprovalDecisions")
+  verifiedReadings OdometerReading[] @relation("ReadingVerifier")
+}
+
+model WorkdaySession {
+  id             String            @id @default(cuid())
+  userId         String
+  date           DateTime
+  loginAt        DateTime
+  logoutAt       DateTime?
+  loginLat       Float?
+  loginLng       Float?
+  logoutLat      Float?
+  logoutLng      Float?
+  status         SessionStatus     @default(OPEN)
+  user           User              @relation(fields: [userId], references: [id])
+  odometerReadings OdometerReading[]
+  siteVisits     SiteVisit[]
+}
+
+model OdometerReading {
+  id             String         @id @default(cuid())
+  sessionId      String
+  type           ReadingType
+  photoUrl       String
+  capturedAt     DateTime
+  capturedLat    Float?
+  capturedLng    Float?
+  ocrValue       Int?
+  finalValue     Int?
+  ocrConfidence  Float?
+  status         ReadingStatus
+  verifiedById   String?
+  verificationNote String?
+  session        WorkdaySession  @relation(fields: [sessionId], references: [id])
+  verifiedBy     User?           @relation("ReadingVerifier", fields: [verifiedById], references: [id])
+}
+
+model Lead {
+  id                   String          @id @default(cuid())
+  siteName             String
+  siteAddress          String
+  score                Int
+  stage                LeadStage
+  nextFollowUpAt       DateTime
+  lastVisitedAt        DateTime
+  currentSupplier      String?
+  priceExpectation     String?
+  futureScope          String?
+  builderName          String?
+  contractorName       String?
+  supervisorName       String?
+  supervisorPhone      String?
+  currentConcreteGrade String?
+  currentQuantityCum   Float?
+  agentId              String
+  siteVisits           SiteVisit[]
+  approvals            ApprovalRequest[]
+}
+
+model SiteVisit {
+  id               String        @id @default(cuid())
+  sessionId        String
+  leadId           String
+  siteName         String
+  siteAddress      String
+  arrivalPhotoUrl  String
+  visitedAt        DateTime
+  lat              Float?
+  lng              Float?
+  concreteGrade    String
+  quantityCum      Float
+  stageOfWork      String
+  futureScope      String
+  currentSupplier  String
+  priceExpectation String
+  score            Int
+  leadStage        LeadStage
+  nextFollowUpAt   DateTime
+  stakeholderJson  String
+  session          WorkdaySession @relation(fields: [sessionId], references: [id])
+  lead             Lead          @relation(fields: [leadId], references: [id])
+}
+
+model ApprovalRequest {
+  id                  String         @id @default(cuid())
+  leadId              String
+  customerName        String
+  grade               String
+  quantity            Float
+  requiredDate        DateTime
+  distanceFromPlantKm Float
+  trafficCount        Int
+  castingType         String
+  quotedPrice         Float
+  status              ApprovalStatus @default(PENDING)
+  decidedById         String?
+  decidedAt           DateTime?
+  decisionNote        String?
+  createdById         String
+  createdAt           DateTime       @default(now())
+  lead                Lead           @relation(fields: [leadId], references: [id])
+  decidedBy           User?          @relation("ApprovalDecisions", fields: [decidedById], references: [id])
+}
+
+model Task {
+  id           String      @id @default(cuid())
+  subject      String
+  explanation  String
+  deadline     DateTime
+  status       TaskStatus  @default(OPEN)
+  assignedToId String
+  assignedById String
+  assignedTo   User        @relation("AssignedTasks", fields: [assignedToId], references: [id])
+  assignedBy   User        @relation("CreatedTasks", fields: [assignedById], references: [id])
+}
+
+model HelpRequest {
+  id             String            @id @default(cuid())
+  agentId        String
+  sessionDate    DateTime
+  requestedField String
+  explanation    String
+  status         HelpRequestStatus @default(OPEN)
+  resolvedById   String?
+  resolutionNote String?
+}
+
+model Target {
+  id            String   @id @default(cuid())
+  userId        String
+  month         String
+  quantityTarget Float
+  user          User     @relation(fields: [userId], references: [id])
+}

@@ -1,0 +1,62 @@
+import type { ReactNode } from "react";
+import { toIndiaTimeLabel } from "@/lib/date";
+import { isLoginDisabled } from "@/lib/auth";
+import { StatusBadge } from "@/components/StatusBadge";
+import { DashboardSwitcher } from "@/components/DashboardSwitcher";
+import { LogoutButton } from "@/components/LogoutButton";
+import { readDatabase } from "@/lib/db";
+import type { User } from "@/lib/types";
+
+interface AppShellProps {
+  user: User;
+  title: string;
+  subtitle: string;
+  statusLabel?: string;
+  compact?: boolean;
+  children: ReactNode;
+}
+
+export async function AppShell({ user, title, subtitle, statusLabel, compact = false, children }: AppShellProps) {
+  const loginDisabled = isLoginDisabled();
+  const switchUsers = loginDisabled
+    ? (await readDatabase()).users
+        .filter((entry) => entry.status === "ACTIVE")
+        .map((entry) => ({
+          id: entry.id,
+          employeeId: entry.employeeId,
+          name: entry.name,
+          role: entry.role,
+        }))
+    : [];
+  const currentUser = {
+    id: user.id,
+    employeeId: user.employeeId,
+    name: user.name,
+    role: user.role,
+  };
+
+  return (
+    <main className="page-shell">
+      <section className={compact ? "hero hero-compact" : "hero"}>
+        <div className="panel-header">
+          <div>
+            <p className="metric-label">{user.role.replaceAll("_", " ")}</p>
+            <h1>{title}</h1>
+            <p className="panel-copy">{subtitle}</p>
+          </div>
+          <div className="button-row">
+            {statusLabel ? <StatusBadge value={statusLabel} /> : null}
+            {loginDisabled ? <DashboardSwitcher currentUser={currentUser} users={switchUsers} /> : <LogoutButton />}
+          </div>
+        </div>
+        <div className="hero-actions">
+          <span className="status-badge status-open-good">{user.name}</span>
+          <span className="status-badge status-talks">Employee ID {user.employeeId}</span>
+          <span className="status-badge status-awaiting_confirmation">{toIndiaTimeLabel(new Date().toISOString())}</span>
+          {loginDisabled ? <span className="status-badge status-manager_view">Login disabled for testing</span> : null}
+        </div>
+      </section>
+      {children}
+    </main>
+  );
+}

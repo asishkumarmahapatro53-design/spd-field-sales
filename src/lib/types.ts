@@ -1,0 +1,484 @@
+export type UserRole = "SALES_AGENT" | "MANAGER" | "ACCOUNTING";
+export type UserStatus = "ACTIVE" | "INACTIVE";
+export type SessionStatus = "OPEN" | "CLOSED";
+export type PlantStatus = "ACTIVE" | "WATCH" | "MAINTENANCE";
+export type ReadingType = "START" | "END";
+export type ReadingStatus =
+  | "OCR_PENDING"
+  | "AWAITING_CONFIRMATION"
+  | "CONFIRMED"
+  | "MANUAL_REVIEW_REQUIRED"
+  | "MANUAL_VERIFIED";
+export type LeadStage = "TALKS" | "NEGOTIATING" | "FINALIZED" | "MISSED";
+export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type TaskStatus = "OPEN" | "DONE";
+export type HelpRequestStatus = "OPEN" | "RESOLVED";
+export type FleetVehicleStatus = "ACTIVE" | "IDLE" | "SERVICE" | "OFF_ROUTE";
+export type CreditRisk = "LOW" | "MEDIUM" | "HIGH";
+export type InvoiceStatus = "OPEN" | "PAID" | "OVERDUE" | "PARTIAL";
+export type PaymentType = "NORMAL" | "CREDIT";
+export type PaymentTerms = "ADVANCE" | "PO" | "PDC" | "PO_AND_PDC";
+export type MixDesignType = "DESIGN_MIX" | "NOMINAL_MIX";
+export type RequestPriority = "NORMAL" | "URGENT";
+export type SalesOrderRequestStatus =
+  | "PENDING_FINANCE"
+  | "FINANCE_VERIFIED"
+  | "FINANCE_REJECTED"
+  | "SCHEDULE_PENDING"
+  | "SCHEDULE_APPROVED"
+  | "SCHEDULE_REJECTED";
+export type ReimbursementClaimStatus = "REQUESTED" | "OTP_SENT" | "PAID" | "REJECTED";
+export type StakeholderRole =
+  | "SITE_SUPERVISOR"
+  | "SITE_ENGINEER"
+  | "CONTRACTOR"
+  | "OWNER_BUILDER"
+  | "PROJECT_MANAGER"
+  | "PURCHASE_HEAD"
+  | "OTHERS"
+  | "FOUND_NO_ONE";
+export type ExpectedSupplyWindow = "WITHIN_7_DAYS" | "WITHIN_15_DAYS" | "WITHIN_30_DAYS" | "MORE_THAN_30_DAYS";
+export type SiteLocationVerificationStatus = "NOT_APPLICABLE" | "MATCHED" | "OUT_OF_RANGE" | "PHOTO_COORDS_MISSING" | "SAVED_COORDS_MISSING";
+
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+export interface User {
+  id: string;
+  employeeId: string;
+  name: string;
+  role: UserRole;
+  status: UserStatus;
+  homePlantId: string | null;
+  passwordHash: string;
+}
+
+export interface AuthSession {
+  id: string;
+  userId: string;
+  token: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface WorkdaySession {
+  id: string;
+  userId: string;
+  plantId: string;
+  date: string;
+  loginAt: string;
+  logoutAt: string | null;
+  loginLatLng: LatLng | null;
+  logoutLatLng: LatLng | null;
+  status: SessionStatus;
+}
+
+export interface OdometerReading {
+  id: string;
+  sessionId: string;
+  type: ReadingType;
+  photoUrl: string;
+  originalFileName: string;
+  capturedAt: string;
+  capturedLatLng: LatLng | null;
+  ocrValue: number | null;
+  finalValue: number | null;
+  ocrConfidence: number | null;
+  status: ReadingStatus;
+  verifiedBy: string | null;
+  verificationNote: string | null;
+}
+
+export interface StakeholderContact {
+  label: string;
+  name: string;
+  phone: string;
+  role?: StakeholderRole;
+}
+
+export interface LeadSite {
+  id: string;
+  leadId: string;
+  plantId: string;
+  siteName: string;
+  siteAddress: string;
+  latLng: LatLng | null;
+  stakeholders: StakeholderContact[];
+  currentSupplier: string;
+  expectedSupplyWindow: ExpectedSupplyWindow | null;
+  futureScope: string;
+  currentConcreteGrade: string;
+  currentQuantityCum: number;
+  score: number;
+  createdAt: string;
+  updatedAt: string;
+  lastVisitedAt: string;
+}
+
+export interface SiteVisit {
+  id: string;
+  sessionId: string;
+  leadId: string;
+  siteId?: string | null;
+  plantId: string;
+  siteName: string;
+  siteAddress: string;
+  arrivalPhotoUrl: string;
+  visitedAt: string;
+  latLng: LatLng | null;
+  detectedLatLng?: LatLng | null;
+  stakeholders: StakeholderContact[];
+  concreteGrade: string;
+  quantityCum: number;
+  stageOfWork: string;
+  futureScope: string;
+  currentSupplier: string;
+  expectedSupplyWindow?: ExpectedSupplyWindow | null;
+  priceExpectation: string;
+  score: number;
+  leadStage: LeadStage;
+  nextFollowUpAt: string;
+  remarksText?: string;
+  remarksVoiceNoteUrl?: string | null;
+  photoWatermarkAddress?: string | null;
+  locationVerificationStatus?: SiteLocationVerificationStatus;
+  locationVerificationDistanceMeters?: number | null;
+}
+
+export interface Lead {
+  id: string;
+  agentId: string;
+  plantId: string;
+  siteName: string;
+  siteAddress: string;
+  score: number;
+  stage: LeadStage;
+  nextFollowUpAt: string;
+  lastVisitedAt: string;
+  currentSupplier: string;
+  priceExpectation: string;
+  futureScope: string;
+  contractorName: string;
+  builderName: string;
+  supervisorName: string;
+  supervisorPhone: string;
+  currentConcreteGrade: string;
+  currentQuantityCum: number;
+  primarySiteId?: string | null;
+  primarySiteLatLng?: LatLng | null;
+  siteCount?: number;
+}
+
+export interface ApprovalRequestItem {
+  id: string;
+  grade: string;
+  quotedPrice: number;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  leadId: string;
+  siteId: string | null;
+  plantId: string;
+  customerName: string;
+  siteName: string;
+  siteAddress: string;
+  items: ApprovalRequestItem[];
+  mixDesignType: MixDesignType;
+  grade: string;
+  quantity: number;
+  requiredDate: string;
+  oneWayDistanceKm: number;
+  distanceFromPlantKm: number;
+  trafficCount: number;
+  castingType: string;
+  paymentType: PaymentType;
+  paymentTerms: PaymentTerms;
+  quotedPrice: number;
+  status: ApprovalStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface Task {
+  id: string;
+  plantId: string;
+  subject: string;
+  explanation: string;
+  deadline: string;
+  status: TaskStatus;
+  assignedTo: string;
+  assignedBy: string;
+}
+
+export interface HelpRequest {
+  id: string;
+  agentId: string;
+  plantId: string;
+  sessionDate: string;
+  requestedField: string;
+  explanation: string;
+  status: HelpRequestStatus;
+  resolvedBy: string | null;
+  resolutionNote: string | null;
+}
+
+export interface Target {
+  id: string;
+  userId: string;
+  month: string;
+  quantityTarget: number;
+}
+
+export interface Plant {
+  id: string;
+  code: string;
+  name: string;
+  region: string;
+  status: PlantStatus;
+  monthlyVolumeTarget: number;
+  currentActiveSitesTarget: number;
+}
+
+export interface FleetVehicle {
+  id: string;
+  plantId: string;
+  vehicleCode: string;
+  driverName: string;
+  capacityCum: number;
+  status: FleetVehicleStatus;
+  deliveriesToday: number;
+  onTimeRate: number;
+  lastDispatchAt: string | null;
+}
+
+export interface MaterialCostSnapshot {
+  id: string;
+  plantId: string;
+  effectiveAt: string;
+  cementPerTon: number;
+  ggbsPerTon: number;
+  flyAshPerTon: number;
+  aggregatePerTon: number;
+  sandPerTon: number;
+  dieselPerLitre: number;
+}
+
+export interface PlantPriceBenchmark {
+  id: string;
+  plantId: string;
+  grade: string;
+  sellingPricePerCum: number;
+}
+
+export interface CustomerAccount {
+  id: string;
+  plantId: string;
+  customerName: string;
+  whatsappNumber: string;
+  creditLimit: number;
+  creditPeriodDays: number;
+  outstandingAmount: number;
+  riskLevel: CreditRisk;
+  lastPaymentAt: string | null;
+}
+
+export interface CustomerInvoice {
+  id: string;
+  plantId: string;
+  accountId: string;
+  invoiceNumber: string;
+  amount: number;
+  issuedAt: string;
+  dueAt: string;
+  status: InvoiceStatus;
+  paidAt: string | null;
+}
+
+export interface SalesOrderRequest {
+  id: string;
+  leadId: string;
+  siteId: string | null;
+  approvalRequestId: string | null;
+  plantId: string;
+  customerName: string;
+  siteName: string;
+  grade: string;
+  approvedPrice: number;
+  quantity: number;
+  amount: number;
+  siteAddress: string;
+  oneWayDistanceKm: number;
+  trafficCount: number;
+  paymentType: PaymentType;
+  paymentTerms: PaymentTerms;
+  mixDesignType: MixDesignType;
+  slump: string;
+  receiverName: string;
+  receiverPhone: string;
+  poDocumentUrl: string | null;
+  pdcDocumentUrl: string | null;
+  paymentReceivedConfirmed: boolean;
+  requiredDate: string;
+  pumpRequired: boolean;
+  priority: RequestPriority;
+  notes: string;
+  status: SalesOrderRequestStatus;
+  financeReviewedBy: string | null;
+  financeReviewedAt: string | null;
+  financeNote: string | null;
+  scheduleDateTime: string | null;
+  scheduleReceiverName: string | null;
+  scheduleReceiverPhone: string | null;
+  scheduleRequestedAt: string | null;
+  scheduleDecidedBy: string | null;
+  scheduleDecidedAt: string | null;
+  scheduleNote: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface ReimbursementClaimLine {
+  sessionId: string;
+  date: string;
+  startReading: number;
+  endReading: number;
+  distanceKm: number;
+  siteVisits: number;
+  fuelAmount: number;
+  lunchAmount: number;
+  totalAmount: number;
+}
+
+export interface ReimbursementClaim {
+  id: string;
+  agentId: string;
+  requestedBy: string;
+  status: ReimbursementClaimStatus;
+  periodStart: string;
+  periodEnd: string;
+  lineItems: ReimbursementClaimLine[];
+  totalDistanceKm: number;
+  fuelAmount: number;
+  lunchAmount: number;
+  totalAmount: number;
+  requestedAt: string;
+  otpCode: string | null;
+  otpSentAt: string | null;
+  otpExpiresAt: string | null;
+  otpVerifiedAt: string | null;
+  paidAt: string | null;
+  paidBy: string | null;
+  rejectedAt: string | null;
+  rejectedBy: string | null;
+  note: string | null;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  actorId: string;
+  actorRole: UserRole;
+  entityType: string;
+  entityId: string;
+  action: string;
+  detail: string;
+  createdAt: string;
+}
+
+export interface Database {
+  users: User[];
+  authSessions: AuthSession[];
+  plants: Plant[];
+  workdaySessions: WorkdaySession[];
+  odometerReadings: OdometerReading[];
+  siteVisits: SiteVisit[];
+  leads: Lead[];
+  leadSites: LeadSite[];
+  approvalRequests: ApprovalRequest[];
+  tasks: Task[];
+  helpRequests: HelpRequest[];
+  targets: Target[];
+  auditLogs: AuditLogEntry[];
+  fleetVehicles: FleetVehicle[];
+  materialCostSnapshots: MaterialCostSnapshot[];
+  priceBenchmarks: PlantPriceBenchmark[];
+  customerAccounts: CustomerAccount[];
+  customerInvoices: CustomerInvoice[];
+  salesOrderRequests: SalesOrderRequest[];
+  reimbursementClaims: ReimbursementClaim[];
+}
+
+export interface ReimbursementSummary {
+  sessionId: string;
+  userId: string;
+  agentName: string;
+  date: string;
+  officeInTime: string;
+  siteVisitStartTime: string | null;
+  startReading: number | null;
+  endReading: number | null;
+  siteVisitEndTime: string | null;
+  officeOutTime: string | null;
+  totalDistance: number | null;
+  totalSiteVisits: number;
+  lunchAmount: number;
+  fuelAmount: number | null;
+  totalAmount: number | null;
+  claimId: string | null;
+  status: "CONFIRMED" | "PENDING" | "MANUAL_VERIFIED" | "OPEN";
+}
+
+export interface AgentDashboardData {
+  user: User;
+  activeSession: WorkdaySession | null;
+  readings: OdometerReading[];
+  siteVisits: SiteVisit[];
+  leads: Lead[];
+  leadSites: LeadSite[];
+  tasks: Task[];
+  approvals: ApprovalRequest[];
+  salesOrderRequests: SalesOrderRequest[];
+  reimbursementClaims: ReimbursementClaim[];
+  targets: Target[];
+  helpRequests: HelpRequest[];
+  reimbursementSummaries: ReimbursementSummary[];
+  pipelineQuantity: number;
+  approvedQuantity: number;
+}
+
+export interface ManagerDashboardData {
+  user: User;
+  plants: Plant[];
+  odometerReadings: OdometerReading[];
+  verificationQueue: OdometerReading[];
+  siteVisits: SiteVisit[];
+  workdaySessions: WorkdaySession[];
+  leads: Lead[];
+  approvals: ApprovalRequest[];
+  salesOrderRequests: SalesOrderRequest[];
+  helpRequests: HelpRequest[];
+  tasks: Task[];
+  targets: Target[];
+  auditLogs: AuditLogEntry[];
+  agents: User[];
+  fleetVehicles: FleetVehicle[];
+  materialCostSnapshots: MaterialCostSnapshot[];
+  priceBenchmarks: PlantPriceBenchmark[];
+  customerAccounts: CustomerAccount[];
+  customerInvoices: CustomerInvoice[];
+}
+
+export interface AccountingDashboardData {
+  user: User;
+  reimbursements: ReimbursementSummary[];
+  reimbursementClaims: ReimbursementClaim[];
+  tasks: Task[];
+  approvals: ApprovalRequest[];
+  salesOrderRequests: SalesOrderRequest[];
+  agents: User[];
+}

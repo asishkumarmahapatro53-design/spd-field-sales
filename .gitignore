@@ -1,0 +1,12 @@
+.next
+node_modules
+.env
+coverage
+data/mock-db.json
+public/uploads
+runtime-uploads
+.env.local
+tools/
+*.log
+*.zip
+*.tsbuildinfo
