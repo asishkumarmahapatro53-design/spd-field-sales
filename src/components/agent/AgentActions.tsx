@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { GpsCamera } from "@/components/agent/GpsCamera";
 import { InstantPriceCard } from "@/components/agent/InstantPriceCard";
 import { SiteVisitFlowCard } from "@/components/agent/SiteVisitFlowCard";
 import {
@@ -9,12 +10,13 @@ import {
   SalesOrderRequestCard as CommercialSalesOrderRequestCard,
   ScheduleRequestCard as CommercialScheduleRequestCard,
 } from "@/components/agent/CommercialRequestCards";
-import { getLocationPayload, parseApiError } from "@/components/agent/action-helpers";
-import type { ApprovalRequest, Lead, LeadSite, OdometerReading, SalesOrderRequest } from "@/lib/types";
+import { parseApiError } from "@/components/agent/action-helpers";
+import type { AgentDashboardData, ApprovalRequest, Lead, LeadSite, OdometerReading, SalesOrderRequest } from "@/lib/types";
 
 type ActionSectionId = "odometer" | "site-visit" | "instant-price" | "approval" | "sales-order" | "schedule" | "help";
 
 interface AgentActionPanelProps {
+  user: AgentDashboardData["user"];
   leads: Lead[];
   leadSites: LeadSite[];
   approvals: ApprovalRequest[];
@@ -60,7 +62,7 @@ function ActionAccordionSection({
   );
 }
 
-export function AgentActionPanel({ leads, leadSites, approvals, salesOrderRequests }: AgentActionPanelProps) {
+export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrderRequests }: AgentActionPanelProps) {
   const [activeSection, setActiveSection] = useState<ActionSectionId>("odometer");
   const pendingApprovals = approvals.filter((approval) => approval.status === "PENDING").length;
   const pendingOrders = salesOrderRequests.filter((request) => request.status === "PENDING_FINANCE").length;
@@ -78,7 +80,7 @@ export function AgentActionPanel({ leads, leadSites, approvals, salesOrderReques
         isOpen={activeSection === "odometer"}
         onOpen={() => setActiveSection("odometer")}
       >
-        <OdometerUploadCard />
+        <OdometerUploadCard agentName={user.name} employeeId={user.employeeId} />
       </ActionAccordionSection>
 
       <ActionAccordionSection
@@ -150,33 +152,55 @@ export function AgentActionPanel({ leads, leadSites, approvals, salesOrderReques
   );
 }
 
-function OdometerUploadCard() {
+function OdometerUploadCard({
+  agentName,
+  employeeId,
+}: {
+  agentName: string;
+  employeeId: string;
+}) {
   const router = useRouter();
   const [isRefreshing, startTransition] = useTransition();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingReading, setPendingReading] = useState<OdometerReading | null>(null);
+  const [readingType, setReadingType] = useState<"START" | "END" | "">("");
+  /** The watermarked+compressed File from GpsCamera */
+  const [capturedFile, setCapturedFile] = useState<File | null>(null);
+  /** GPS from GpsCamera (already embedded in photo watermark, also sent to API separately) */
+  const [capturedCoords, setCapturedCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  function handleCapture(file: File, coords: { lat: number; lng: number } | null) {
+    setCapturedFile(file);
+    setCapturedCoords(coords);
+    setError("");
+    setMessage("");
+  }
 
   async function submitReading(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setBusy(true);
     setMessage("");
     setError("");
 
-    const formElement = event.currentTarget;
-    const formData = new FormData(formElement);
-    const type = `${formData.get("type") ?? ""}`;
-
-    if (!type) {
+    if (!readingType) {
       setError("Select whether this is a start or end reading.");
-      setBusy(false);
       return;
     }
 
-    const location = await getLocationPayload();
-    formData.set("lat", location.lat);
-    formData.set("lng", location.lng);
+    if (!capturedFile) {
+      setError("Please take an odometer photo first.");
+      return;
+    }
+
+    setBusy(true);
+
+    // Build FormData — same contract the API already expects
+    const formData = new FormData();
+    formData.set("type", readingType);
+    formData.set("photo", capturedFile, capturedFile.name);
+    formData.set("lat", capturedCoords ? String(capturedCoords.lat) : "");
+    formData.set("lng", capturedCoords ? String(capturedCoords.lng) : "");
 
     const response = await fetch("/api/odometer-readings", {
       method: "POST",
@@ -190,7 +214,10 @@ function OdometerUploadCard() {
     }
 
     const payload = (await response.json()) as { reading?: OdometerReading };
-    formElement.reset();
+    // Reset camera state after successful upload
+    setCapturedFile(null);
+    setCapturedCoords(null);
+    setReadingType("");
     setBusy(false);
 
     if (payload.reading?.status === "AWAITING_CONFIRMATION") {
@@ -207,15 +234,14 @@ function OdometerUploadCard() {
     }
 
     setPendingReading(null);
-    setMessage("AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.");
+    setMessage(
+      "AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.",
+    );
     startTransition(() => router.refresh());
   }
 
   async function confirmReading() {
-    if (!pendingReading) {
-      return;
-    }
-
+    if (!pendingReading) return;
     setBusy(true);
     setError("");
 
@@ -233,10 +259,7 @@ function OdometerUploadCard() {
   }
 
   async function rejectReading() {
-    if (!pendingReading) {
-      return;
-    }
-
+    if (!pendingReading) return;
     setBusy(true);
     setError("");
 
@@ -259,23 +282,48 @@ function OdometerUploadCard() {
 
   return (
     <form className="form-grid" onSubmit={submitReading}>
+      {/* Step 1: Choose reading type */}
       <div className="field">
-        <label htmlFor="type">Reading type</label>
-        <select id="type" name="type" defaultValue="" required>
-          <option value="" disabled>
-            Select reading type
-          </option>
+        <label htmlFor="reading-type">Reading type</label>
+        <select
+          id="reading-type"
+          name="type"
+          value={readingType}
+          onChange={(e) => setReadingType(e.target.value as "START" | "END" | "")}
+          required
+        >
+          <option value="" disabled>Select reading type</option>
           <option value="START">Start reading</option>
           <option value="END">End reading</option>
         </select>
       </div>
+
+      {/* Step 2: Smart GPS Camera — forces rear camera, auto-watermarks */}
       <div className="field">
-        <label htmlFor="photo">Photo</label>
-        <input id="photo" name="photo" type="file" accept="image/*" required />
-        <span className="hint">Use a clear dashboard photo. GPS watermark text can stay in the image.</span>
+        <label>Odometer Photo</label>
+        <GpsCamera
+          label="Take Odometer Photo"
+          agentName={agentName}
+          employeeId={employeeId}
+          onCapture={handleCapture}
+          disabled={busy}
+        />
+        {capturedFile && (
+          <span className="hint">
+            ✅ Photo ready: {capturedFile.name} ({(capturedFile.size / 1024).toFixed(0)} KB)
+          </span>
+        )}
+        {!capturedFile && (
+          <span className="hint">
+            The app will open your rear camera, capture GPS, and watermark the photo automatically.
+          </span>
+        )}
       </div>
+
       {message ? <div className="success-box">{message}</div> : null}
       {error ? <div className="error-box">{error}</div> : null}
+
+      {/* OCR confirmation box */}
       {pendingReading ? (
         <div className="warning-box">
           Extracted value: <strong>{pendingReading.ocrValue ?? "Not found"}</strong>.
@@ -294,8 +342,9 @@ function OdometerUploadCard() {
           </div>
         </div>
       ) : null}
-      <button className="button" type="submit" disabled={busy || isRefreshing}>
-        {busy ? "Uploading..." : isRefreshing ? "Refreshing..." : "Upload reading"}
+
+      <button className="button" type="submit" disabled={busy || isRefreshing || !capturedFile}>
+        {busy ? "Uploading..." : isRefreshing ? "Refreshing..." : "Upload Reading"}
       </button>
     </form>
   );

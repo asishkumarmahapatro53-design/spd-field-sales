@@ -408,6 +408,7 @@ export function SalesOrderRequestCard({
   const [approvalItemId, setApprovalItemId] = useState(approvalItems[0]?.id ?? "");
   const selectedItem = selectedApproval ? getApprovalItemById(selectedApproval, approvalItemId) : null;
   const [quantity, setQuantity] = useState("");
+  const [requiredDate, setRequiredDate] = useState("");
   const [pumpRequired, setPumpRequired] = useState(false);
   const normalizedPaymentTerms = selectedApproval
     ? normalizePaymentTerms(selectedApproval.paymentType, selectedApproval.paymentTerms)
@@ -433,6 +434,8 @@ export function SalesOrderRequestCard({
       return approvalItems[0]?.id ?? "";
     });
     setQuantity((current) => current || `${selectedApproval.quantity}`);
+    // Sync the required date whenever the selected approval changes
+    setRequiredDate(toDateInputValue(selectedApproval.requiredDate));
   }, [approvalItems, selectedApproval]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -549,7 +552,14 @@ export function SalesOrderRequestCard({
           </div>
           <div className="field">
             <label htmlFor="salesRequiredDate">Required date</label>
-            <input id="salesRequiredDate" name="requiredDate" type="date" defaultValue={toDateInputValue(selectedApproval?.requiredDate)} required />
+            <input
+              id="salesRequiredDate"
+              name="requiredDate"
+              type="date"
+              value={requiredDate}
+              onChange={(event) => setRequiredDate(event.target.value)}
+              required
+            />
           </div>
         </div>
 

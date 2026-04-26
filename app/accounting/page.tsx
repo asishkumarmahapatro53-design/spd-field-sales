@@ -38,6 +38,7 @@ export default async function AccountingPage() {
 
       <AccountingWorkspace
         agents={data.agents}
+        plants={data.plants}
         reimbursements={data.reimbursements}
         claims={data.reimbursementClaims}
         salesOrderRequests={data.salesOrderRequests}

@@ -1602,12 +1602,31 @@ export async function getAccountingDashboardData(user: User): Promise<Accounting
 
   return {
     user,
+    plants: database.plants,
     reimbursements: computeReimbursementSummaries(database),
     reimbursementClaims: [...database.reimbursementClaims].sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
     tasks: database.tasks,
     approvals: database.approvalRequests,
     salesOrderRequests: [...database.salesOrderRequests].sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     agents: database.users.filter((entry) => entry.role === "SALES_AGENT"),
+  };
+}
+
+export async function getBatcherDashboardData(user: User): Promise<BatcherDashboardData> {
+  assertRole(user, ["BATCHER", "MANAGER"]);
+  const database = await readDatabase();
+  const plantId = user.homePlantId;
+  const plant = database.plants.find((p) => p.id === plantId) ?? null;
+
+  return {
+    user,
+    plant,
+    activeOrders: database.salesOrderRequests.filter(
+      (o) => o.homePlantId === plantId && o.status === "SCHEDULE_APPROVED" && o.remainingQuantity > 0
+    ),
+    mixDesigns: database.mixDesigns?.filter((m) => m.plantId === plantId && m.isActive) ?? [],
+    fleetVehicles: database.fleetVehicles.filter((v) => v.homePlantId === plantId),
+    dispatchRecords: database.dispatchRecords?.filter((d) => d.plantId === plantId) ?? [],
   };
 }
 

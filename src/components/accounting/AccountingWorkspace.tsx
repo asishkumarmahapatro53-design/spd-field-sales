@@ -3,13 +3,15 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AccountingSalesOrderVerification } from "@/components/accounting/AccountingSalesOrderVerification";
+import { CommissionVoucherPanel } from "@/components/accounting/CommissionVoucherPanel";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
+import type { Plant, ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
 
-type DepartmentId = "SALES" | "PRODUCTION" | "HR" | "LABOR";
+type DepartmentId = "SALES" | "PRODUCTION" | "HR" | "LABOR" | "COMMISSION";
 
 const departments: Array<{ id: DepartmentId; label: string; scope: string }> = [
   { id: "SALES", label: "Sales Department", scope: "Agent fuel and lunch reimbursement" },
+  { id: "COMMISSION", label: "Commission & Vouchers", scope: "Third-party and agent commissions with Tally Export" },
   { id: "PRODUCTION", label: "Production Department", scope: "Food and plant support expenses" },
   { id: "HR", label: "HR Department", scope: "Staff payment and welfare requests" },
   { id: "LABOR", label: "Labor Department", scope: "Daily labor payment register" },
@@ -58,12 +60,13 @@ function parseApiError(response: Response) {
 
 interface AccountingWorkspaceProps {
   agents: User[];
+  plants: Plant[];
   reimbursements: ReimbursementSummary[];
   claims: ReimbursementClaim[];
   salesOrderRequests: SalesOrderRequest[];
 }
 
-export function AccountingWorkspace({ agents, reimbursements, claims, salesOrderRequests }: AccountingWorkspaceProps) {
+export function AccountingWorkspace({ agents, plants, reimbursements, claims, salesOrderRequests }: AccountingWorkspaceProps) {
   const router = useRouter();
   const [departmentId, setDepartmentId] = useState<DepartmentId>("SALES");
   const [selectedAgentId, setSelectedAgentId] = useState(agents[0]?.id ?? "");
@@ -395,38 +398,36 @@ export function AccountingWorkspace({ agents, reimbursements, claims, salesOrder
 
           <AccountingSalesOrderVerification requests={salesOrderRequests} />
         </section>
+      ) : departmentId === "COMMISSION" ? (
+        <section className="accounting-section">
+          <CommissionVoucherPanel plants={plants} />
+        </section>
       ) : (
-        <DepartmentPlaceholder departmentId={departmentId} />
+        <DepartmentPlaceholder departmentId={departmentId as Exclude<DepartmentId, "SALES">} />
       )}
     </div>
   );
 }
 
+
 function DepartmentPlaceholder({ departmentId }: { departmentId: Exclude<DepartmentId, "SALES"> }) {
-  const rows =
-    departmentId === "PRODUCTION"
-      ? ["Daily food reimbursement", "Batch plant cash support", "Production helper meals"]
-      : departmentId === "HR"
-        ? ["Staff welfare reimbursement", "Attendance correction payout", "Monthly support advances"]
-        : ["Daily labor payment", "Mason/helper attendance", "Labor meal allowance"];
+  const dept = departments.find((department) => department.id === departmentId);
 
   return (
     <section className="accounting-section">
       <div className="accounting-command-row">
         <div>
-          <h2>{departments.find((department) => department.id === departmentId)?.label}</h2>
-          <p className="panel-copy">Payment register prepared for the next phase of accounting fields.</p>
+          <h2>{dept?.label}</h2>
+          <p className="panel-copy">{dept?.scope}</p>
         </div>
-        <span className="status-badge status-open-good">Prepared</span>
+        <span className="status-badge status-no_activity">Coming soon</span>
       </div>
-      <div className="department-placeholder-grid">
-        {rows.map((row, index) => (
-          <article key={row} className="accounting-panel">
-            <span className="summary-label">Queue {index + 1}</span>
-            <h3>{row}</h3>
-            <p className="panel-copy">No pending entries have been configured for this section yet.</p>
-          </article>
-        ))}
+      <div className="note-box">
+        <strong>This section is not yet active for the current pilot.</strong>
+        <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+          Payment registers for {dept?.label.toLowerCase()} are being prepared for the next release phase.
+          Use the <strong>Sales Department</strong> tab to access agent reimbursements.
+        </p>
       </div>
     </section>
   );

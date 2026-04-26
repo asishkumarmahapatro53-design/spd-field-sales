@@ -1,4 +1,4 @@
-export type UserRole = "SALES_AGENT" | "MANAGER" | "ACCOUNTING";
+export type UserRole = "SALES_AGENT" | "MANAGER" | "ACCOUNTING" | "BATCHER";
 export type UserStatus = "ACTIVE" | "INACTIVE";
 export type SessionStatus = "OPEN" | "CLOSED";
 export type PlantStatus = "ACTIVE" | "WATCH" | "MAINTENANCE";
@@ -19,6 +19,9 @@ export type InvoiceStatus = "OPEN" | "PAID" | "OVERDUE" | "PARTIAL";
 export type PaymentType = "NORMAL" | "CREDIT";
 export type PaymentTerms = "ADVANCE" | "PO" | "PDC" | "PO_AND_PDC";
 export type MixDesignType = "DESIGN_MIX" | "NOMINAL_MIX";
+export type DispatchStatus = "DISPATCHED" | "RETURNED" | "SITE_ACCEPTED" | "SITE_REJECTED";
+export type CommissionVoucherStatus = "DRAFT" | "APPROVED" | "EXPORTED_TO_TALLY";
+export type CommissionRecipientType = "SALES_AGENT" | "THIRD_PARTY";
 export type RequestPriority = "NORMAL" | "URGENT";
 export type SalesOrderRequestStatus =
   | "PENDING_FINANCE"
@@ -311,6 +314,8 @@ export interface SalesOrderRequest {
   grade: string;
   approvedPrice: number;
   quantity: number;
+  /** Tracks remaining cum to be dispatched. Initialized to quantity, decremented atomically on each dispatch. */
+  remainingQuantity: number;
   amount: number;
   siteAddress: string;
   oneWayDistanceKm: number;
@@ -318,6 +323,8 @@ export interface SalesOrderRequest {
   paymentType: PaymentType;
   paymentTerms: PaymentTerms;
   mixDesignType: MixDesignType;
+  /** FK to MixDesign.id — links the order to a specific recipe for material auditing. */
+  mixDesignId: string | null;
   slump: string;
   receiverName: string;
   receiverPhone: string;
@@ -341,6 +348,75 @@ export interface SalesOrderRequest {
   scheduleNote: string | null;
   createdBy: string;
   createdAt: string;
+}
+
+/** Recipe for a concrete grade. One grade can have multiple versions per plant. */
+export interface MixDesign {
+  id: string;
+  plantId: string;
+  grade: string;                    // e.g. "M25", "M30"
+  version: number;                  // Incremented on each update, latest version is active
+  isActive: boolean;
+  mixDesignType: MixDesignType;
+  targetSlumpMm: number;
+  // Material quantities in kg per cubic meter (cum)
+  cementKgPerCum: number;
+  ggbsKgPerCum: number;
+  flyAshKgPerCum: number;
+  sandKgPerCum: number;
+  aggregate10mmKgPerCum: number;
+  aggregate20mmKgPerCum: number;
+  admixtureKgPerCum: number;
+  waterLitresPerCum: number;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Records each truck dispatch against a SalesOrderRequest. */
+export interface DispatchRecord {
+  id: string;
+  orderId: string;
+  plantId: string;
+  vehicleId: string;
+  vehicleCode: string;
+  driverName: string;
+  dispatchedQuantityCum: number;
+  returnedQuantityCum: number;      // Non-zero if truck returned with leftover concrete
+  finalSuppliedCum: number;         // dispatchedQuantityCum - returnedQuantityCum
+  status: DispatchStatus;
+  dispatchedAt: string;
+  siteAcceptedAt: string | null;
+  siteRejectedAt: string | null;
+  // E-Way Bill data (populated after GSP API call)
+  ewayBillNumber: string | null;
+  ewayBillGeneratedAt: string | null;
+  // Material consumption (auto-calculated from MixDesign × finalSuppliedCum)
+  theoreticalCementKg: number | null;
+  theoreticalGgbsKg: number | null;
+  theoreticalFlyAshKg: number | null;
+  theoreticalSandKg: number | null;
+  theoreticalAggregate10mmKg: number | null;
+  theoreticalAggregate20mmKg: number | null;
+  theoreticalAdmixtureKg: number | null;
+  theoreticalWaterLitres: number | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Commission voucher — manually created by Accounts Head. */
+export interface CommissionVoucher {
+  id: string;
+  plantId: string;
+  brokerName: string;
+  siteName: string;
+  quantityCum: number;
+  ratePerCum: number;
+  totalCommission: number;
+  status: CommissionVoucherStatus;
+  createdBy: string;               // Must be ACCOUNTING role
+  createdAt: string;
+  exportedAt: string | null;
 }
 
 export interface ReimbursementClaimLine {
@@ -411,6 +487,10 @@ export interface Database {
   customerInvoices: CustomerInvoice[];
   salesOrderRequests: SalesOrderRequest[];
   reimbursementClaims: ReimbursementClaim[];
+  // RMC Phase 1 additions
+  mixDesigns: MixDesign[];
+  dispatchRecords: DispatchRecord[];
+  commissionVouchers: CommissionVoucher[];
 }
 
 export interface ReimbursementSummary {
@@ -475,10 +555,20 @@ export interface ManagerDashboardData {
 
 export interface AccountingDashboardData {
   user: User;
+  plants: Plant[];
   reimbursements: ReimbursementSummary[];
   reimbursementClaims: ReimbursementClaim[];
   tasks: Task[];
   approvals: ApprovalRequest[];
   salesOrderRequests: SalesOrderRequest[];
   agents: User[];
+}
+
+export interface BatcherDashboardData {
+  user: User;
+  plant: Plant | null;
+  activeOrders: SalesOrderRequest[];
+  mixDesigns: MixDesign[];
+  fleetVehicles: FleetVehicle[];
+  dispatchRecords: DispatchRecord[];
 }

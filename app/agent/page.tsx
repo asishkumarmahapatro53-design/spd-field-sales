@@ -4,6 +4,7 @@ import { Panel } from "@/components/Panel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { AgentActionPanel } from "@/components/agent/AgentActions";
 import { AgentReimbursementClaims } from "@/components/agent/AgentReimbursementClaims";
+import { AiAssistant } from "@/components/agent/AiAssistant";
 import { ReadingLogList } from "@/components/agent/ReadingLogList";
 import { ReimbursementSummaryList } from "@/components/agent/ReimbursementSummaryList";
 import { requireUser } from "@/lib/auth";
@@ -50,6 +51,7 @@ export default async function AgentPage() {
 
       <Panel title="Action Center" description="Move through the day one workflow at a time.">
         <AgentActionPanel
+          user={data.user}
           leads={data.leads}
           leadSites={data.leadSites}
           approvals={data.approvals}
@@ -154,6 +156,8 @@ export default async function AgentPage() {
           </div>
         </Panel>
       </section>
+      {/* Floating AI Assistant — available on every scroll position */}
+      <AiAssistant agentId={data.user.id} />
     </AppShell>
   );
 }

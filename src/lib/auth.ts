@@ -61,7 +61,7 @@ export async function setDemoRole(role: UserRole, userId?: string | null) {
   cookieStore.set(DEMO_ROLE_COOKIE_NAME, role, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     path: "/",
   });
 
@@ -69,7 +69,7 @@ export async function setDemoRole(role: UserRole, userId?: string | null) {
     cookieStore.set(DEMO_USER_COOKIE_NAME, userId, {
       httpOnly: true,
       sameSite: "lax",
-      secure: false,
+      secure: process.env.NODE_ENV === "production",
       path: "/",
     });
   } else {
@@ -105,7 +105,7 @@ export async function loginWithEmployeeId(employeeId: string, password: string) 
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(expiresAt),
   });

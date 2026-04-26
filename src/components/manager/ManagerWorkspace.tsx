@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Panel } from "@/components/Panel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { compareIsoAsc, toDateKey, toIndiaTimeLabel } from "@/lib/date";
+import { MixDesignMaster } from "@/components/manager/MixDesignMaster";
 import {
   ApprovalDecisionCard,
   HelpResolutionCard,
@@ -647,6 +648,14 @@ export function ManagerWorkspace({ data }: { data: ManagerDashboardData }) {
           <LeadAuditOverviewPanel selectedPlant={selectedPlant} />
           <SalesAgentTrackingPanel selectedPlant={selectedPlant} data={data} />
         </div>
+      </section>
+
+      {/* ── Mix Design Master ─────────────────────────────────── */}
+      <section className="manager-section mt-32">
+        <MixDesignMaster
+          plants={data.plants}
+          currentPlantId={selectedPlant.plant.id}
+        />
       </section>
 
       {hubOpen ? (

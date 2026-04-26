@@ -552,6 +552,9 @@ function normalizeDatabase(rawDatabase: Database) {
     request.paymentType ??= linkedApproval?.paymentType ?? "NORMAL";
     request.paymentTerms = normalizePaymentTerms(request.paymentType, request.paymentTerms ?? linkedApproval?.paymentTerms ?? "ADVANCE");
     request.mixDesignType ??= linkedApproval?.mixDesignType ?? "DESIGN_MIX";
+    // RMC Phase 1: initialize new fields
+    request.mixDesignId ??= null;
+    request.remainingQuantity ??= request.quantity;
     request.slump ??= "";
     request.receiverName ??= "";
     request.receiverPhone ??= "";
@@ -582,6 +585,11 @@ function normalizeDatabase(rawDatabase: Database) {
             ? "FINANCE_REJECTED"
             : "PENDING_FINANCE";
   });
+
+  // Normalize new RMC collections (ensure they exist)
+  database.mixDesigns ??= [];
+  database.dispatchRecords ??= [];
+  database.commissionVouchers ??= [];
 
   database.reimbursementClaims ??= [];
   (database.reimbursementClaims ?? []).forEach((claim) => {
@@ -643,12 +651,16 @@ const COLLECTION_NAMES = [
   "priceBenchmarks",
   "customerAccounts",
   "customerInvoices",
+  // RMC Phase 1
+  "mixDesigns",
+  "dispatchRecords",
+  "commissionVouchers",
 ] as const;
 
 async function syncAllToFirebase(database: Database) {
   const firestore = await getFirebaseFirestore();
   const rootCollection = getFirebaseRootPath();
-  const batch = firestore.batch();
+  let batch = firestore.batch();
   let opCount = 0;
 
   for (const collectionName of COLLECTION_NAMES) {
@@ -658,9 +670,10 @@ async function syncAllToFirebase(database: Database) {
         const ref = firestore.collection(rootCollection).doc("collections").collection(collectionName).doc(item.id);
         batch.set(ref, item);
         opCount++;
-        
+
         if (opCount >= 490) {
           await batch.commit();
+          batch = firestore.batch(); // start a fresh batch after every commit
           opCount = 0;
         }
       }
@@ -739,27 +752,31 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
     
     const firestore = await getFirebaseFirestore();
     const rootCollection = getFirebaseRootPath();
-    const batch = firestore.batch();
+    let batch = firestore.batch();
     let opCount = 0;
 
     for (const collectionName of COLLECTION_NAMES) {
       const list = (database[collectionName as keyof Database] || []) as any[];
       const oldMap = originalMaps.get(collectionName)!;
       const refCol = firestore.collection(rootCollection).doc("collections").collection(collectionName);
-      
+
       const newIds = new Set<string>();
 
       for (const newItem of list) {
         if (!newItem.id) continue;
         newIds.add(newItem.id);
-        
+
         const newStr = JSON.stringify(newItem);
         const oldStr = oldMap.get(newItem.id);
-        
+
         if (newStr !== oldStr) {
           batch.set(refCol.doc(newItem.id), newItem);
           opCount++;
-          if (opCount >= 490) { await batch.commit(); opCount = 0; }
+          if (opCount >= 490) {
+            await batch.commit();
+            batch = firestore.batch(); // fresh batch after commit
+            opCount = 0;
+          }
         }
       }
 
@@ -768,7 +785,11 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
         if (!newIds.has(oldId)) {
           batch.delete(refCol.doc(oldId));
           opCount++;
-          if (opCount >= 490) { await batch.commit(); opCount = 0; }
+          if (opCount >= 490) {
+            await batch.commit();
+            batch = firestore.batch(); // fresh batch after commit
+            opCount = 0;
+          }
         }
       }
     }

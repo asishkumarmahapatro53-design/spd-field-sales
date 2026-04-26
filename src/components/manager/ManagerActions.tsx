@@ -124,6 +124,7 @@ export function ApprovalDecisionCard({
   leads: Lead[];
 }) {
   const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
   const [selectedApprovalId, setSelectedApprovalId] = useState("");
   const pendingApprovals = approvals.filter((entry) => entry.status === "PENDING");
   const selectedApproval = pendingApprovals.find((entry) => entry.id === selectedApprovalId);
@@ -154,6 +155,7 @@ export function ApprovalDecisionCard({
 
   async function decide(id: string, status: "APPROVED" | "REJECTED", note: string) {
     setBusyId(id);
+    setError("");
     const response = await fetch(`/api/approval-requests/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -161,6 +163,7 @@ export function ApprovalDecisionCard({
     });
 
     if (!response.ok) {
+      setError(await parseApiError(response));
       setBusyId("");
       return;
     }
@@ -176,6 +179,7 @@ export function ApprovalDecisionCard({
           <p className="panel-copy">Managers are the only role allowed to approve or reject final prices.</p>
         </div>
       </div>
+      {error ? <div className="error-box">{error}</div> : null}
       <div className="data-list">
         {pendingApprovals.length ? (
           pendingApprovals.map((approval) => (
@@ -473,15 +477,24 @@ export function HelpResolutionCard({ helpRequests }: { helpRequests: HelpRequest
 
 export function TaskAssignmentCard({ agents }: { agents: User[] }) {
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setMessage("");
+    setError("");
     const formData = new FormData(event.currentTarget);
-    await fetch("/api/tasks", {
+    const response = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(Object.fromEntries(formData.entries())),
     });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      return;
+    }
+
     setMessage("Task assigned.");
     window.setTimeout(() => window.location.reload(), 700);
   }
@@ -521,6 +534,7 @@ export function TaskAssignmentCard({ agents }: { agents: User[] }) {
           <input id="deadline" name="deadline" type="datetime-local" required />
         </div>
         {message ? <div className="success-box">{message}</div> : null}
+        {error ? <div className="error-box">{error}</div> : null}
         <button className="button" type="submit">
           Assign task
         </button>

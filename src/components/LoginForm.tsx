@@ -54,9 +54,9 @@ export function LoginForm() {
     });
 
     if (!sessionResponse.ok) {
-      const payload = await sessionResponse.json().catch(() => ({ error: "Workday session could not be started." }));
-      setError(payload.error ?? "Workday session could not be started.");
-      setLoading(false);
+      // Session-start can legitimately fail (e.g., an open session already exists from the prior day).
+      // Login succeeded, so proceed to the dashboard regardless — the agent's existing session remains valid.
+      window.location.href = "/dashboard";
       return;
     }
 
