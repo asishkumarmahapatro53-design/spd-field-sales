@@ -16,5 +16,9 @@ export default async function DashboardPage() {
     redirect("/manager");
   }
 
+  if (user.role === "BATCHER") {
+    redirect("/batcher");
+  }
+
   redirect("/accounting");
 }

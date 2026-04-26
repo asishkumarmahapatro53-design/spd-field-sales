@@ -268,12 +268,13 @@ function createSeedDatabase(): Database {
   const salesAgent = createUserSeed("SA1001", "Ravi Sharma", "SALES_AGENT", "password123", DEFAULT_PLANT_IDS[0]);
   const manager = createUserSeed("MG2001", "Anita Verma", "MANAGER", "password123", null);
   const accounting = createUserSeed("AC3001", "Karan Gupta", "ACCOUNTING", "password123", null);
+  const batcher = createUserSeed("BA4001", "Suresh Naik", "BATCHER", "password123", DEFAULT_PLANT_IDS[0]);
   const now = nowIso();
   const today = toDateKey(now);
   const customerAccounts = createCustomerAccountSeeds();
 
   return {
-    users: [salesAgent, manager, accounting],
+    users: [salesAgent, manager, accounting, batcher],
     authSessions: [],
     plants,
     workdaySessions: [],
