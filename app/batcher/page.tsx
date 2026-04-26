@@ -10,9 +10,9 @@ export default async function BatcherPage() {
   const data = await getBatcherDashboardData(user);
 
   const pendingOrders = data.activeOrders.length;
-  const totalVolumeRemaining = data.activeOrders.reduce((sum, o) => sum + o.remainingQuantity, 0);
+  const totalVolumeRemaining = data.activeOrders.reduce((sum: number, o) => sum + o.remainingQuantity, 0);
   const idleTrucks = data.fleetVehicles.filter((v) => v.status === "IDLE").length;
-  const todayDispatched = data.dispatchRecords.reduce((sum, d) => sum + d.dispatchedQuantityCum, 0);
+  const todayDispatched = data.dispatchRecords.reduce((sum: number, d) => sum + d.dispatchedQuantityCum, 0);
 
   return (
     <AppShell

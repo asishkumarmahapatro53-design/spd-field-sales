@@ -76,7 +76,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
         throw new Error(d.error ?? "Dispatch failed");
       }
 
-      setSuccess(`Dispatched ${dispatchQty} CUM to ${selectedOrder.siteName} using truck ${selectedVehicle.vehicleRegistrationNumber}.`);
+      setSuccess(`Dispatched ${dispatchQty} CUM to ${selectedOrder.siteName} using truck ${selectedVehicle.vehicleCode}.`);
       setDispatchQty("");
       setSelectedVehicleId("");
       
@@ -190,7 +190,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
               <option value="">-- Choose Truck --</option>
               {idleVehicles.map((v) => (
                 <option key={v.id} value={v.id}>
-                  {v.vehicleRegistrationNumber} ({v.capacityCum} CUM Cap) - {v.assignedDriverName || "No Driver"}
+                  {v.vehicleCode} ({v.capacityCum} CUM Cap) - {v.driverName || "No Driver"}
                 </option>
               ))}
             </select>
