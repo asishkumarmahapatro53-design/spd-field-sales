@@ -312,6 +312,9 @@ function createSeedDatabase(): Database {
     priceBenchmarks: createPriceBenchmarkSeeds(),
     customerAccounts,
     customerInvoices: createCustomerInvoiceSeeds(customerAccounts.map((entry) => entry.id)),
+    mixDesigns: [],
+    dispatchRecords: [],
+    commissionVouchers: [],
   };
 }
 

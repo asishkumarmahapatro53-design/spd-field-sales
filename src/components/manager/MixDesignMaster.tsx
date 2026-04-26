@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import type { MixDesign, Plant } from "@/lib/types";
+import type { MixDesign, MixDesignType, Plant } from "@/lib/types";
 
 interface MixDesignMasterProps {
   plants: Plant[];
@@ -10,9 +10,24 @@ interface MixDesignMasterProps {
 
 const GRADES = ["M10", "M15", "M20", "M25", "M30", "M35", "M40", "M45", "M50"];
 
-const emptyForm = {
+type MixDesignForm = {
+  grade: string;
+  mixDesignType: MixDesignType;
+  targetSlumpMm: number;
+  cementKgPerCum: number;
+  ggbsKgPerCum: number;
+  flyAshKgPerCum: number;
+  sandKgPerCum: number;
+  aggregate10mmKgPerCum: number;
+  aggregate20mmKgPerCum: number;
+  admixtureKgPerCum: number;
+  waterLitresPerCum: number;
+};
+
+function createEmptyForm(): MixDesignForm {
+  return {
   grade: "M25",
-  mixDesignType: "DESIGN_MIX" as const,
+  mixDesignType: "DESIGN_MIX",
   targetSlumpMm: 100,
   cementKgPerCum: 0,
   ggbsKgPerCum: 0,
@@ -22,7 +37,8 @@ const emptyForm = {
   aggregate20mmKgPerCum: 0,
   admixtureKgPerCum: 0,
   waterLitresPerCum: 0,
-};
+  };
+}
 
 export function MixDesignMaster({ plants, currentPlantId }: MixDesignMasterProps) {
   const [selectedPlantId, setSelectedPlantId] = useState(currentPlantId ?? plants[0]?.id ?? "");
@@ -33,7 +49,7 @@ export function MixDesignMaster({ plants, currentPlantId }: MixDesignMasterProps
   const [success, setSuccess] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState<MixDesignForm>(createEmptyForm());
 
   const loadDesigns = useCallback(async () => {
     if (!selectedPlantId) return;
@@ -55,7 +71,7 @@ export function MixDesignMaster({ plants, currentPlantId }: MixDesignMasterProps
   }, [loadDesigns]);
 
   function openNewForm() {
-    setForm(emptyForm);
+    setForm(createEmptyForm());
     setEditingId(null);
     setShowForm(true);
     setSuccess("");
@@ -82,7 +98,7 @@ export function MixDesignMaster({ plants, currentPlantId }: MixDesignMasterProps
     setError("");
   }
 
-  function setField(key: keyof typeof emptyForm, value: string | number) {
+  function setField<K extends keyof MixDesignForm>(key: K, value: MixDesignForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
@@ -172,7 +188,7 @@ export function MixDesignMaster({ plants, currentPlantId }: MixDesignMasterProps
               <select
                 className="select"
                 value={form.mixDesignType}
-                onChange={(e) => setField("mixDesignType", e.target.value as "DESIGN_MIX" | "NOMINAL_MIX")}
+                onChange={(e) => setField("mixDesignType", e.target.value as MixDesignType)}
               >
                 <option value="DESIGN_MIX">Design Mix</option>
                 <option value="NOMINAL_MIX">Nominal Mix</option>
@@ -202,7 +218,7 @@ export function MixDesignMaster({ plants, currentPlantId }: MixDesignMasterProps
                 ["20mm Aggregate (kg)", "aggregate20mmKgPerCum"],
                 ["Admixture (kg)", "admixtureKgPerCum"],
                 ["Water (Litres)", "waterLitresPerCum"],
-              ] as [string, keyof typeof emptyForm][]
+              ] as [string, keyof MixDesignForm][]
             ).map(([label, key]) => (
               <div className="field" key={key}>
                 <label>{label}</label>

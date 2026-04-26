@@ -109,6 +109,9 @@ const baseDatabase: Database = {
   priceBenchmarks: [],
   customerAccounts: [],
   customerInvoices: [],
+  mixDesigns: [],
+  dispatchRecords: [],
+  commissionVouchers: [],
 };
 
 describe("computeReimbursementSummaries", () => {
