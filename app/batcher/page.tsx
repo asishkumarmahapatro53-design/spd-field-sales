@@ -4,15 +4,16 @@ import { MetricCard } from "@/components/MetricCard";
 import { requireUser } from "@/lib/auth";
 import { getBatcherDashboardData } from "@/lib/repository";
 import { toIndiaTimeLabel } from "@/lib/date";
+import type { SalesOrderRequest, FleetVehicle, DispatchRecord } from "@/lib/types";
 
 export default async function BatcherPage() {
   const user = await requireUser("BATCHER");
   const data = await getBatcherDashboardData(user);
 
   const pendingOrders = data.activeOrders.length;
-  const totalVolumeRemaining = data.activeOrders.reduce((sum: number, o: any) => sum + o.remainingQuantity, 0);
-  const idleTrucks = data.fleetVehicles.filter((v: any) => v.status === "IDLE").length;
-  const todayDispatched = data.dispatchRecords.reduce((sum: number, d: any) => sum + d.dispatchedQuantityCum, 0);
+  const totalVolumeRemaining = data.activeOrders.reduce((sum: number, o: SalesOrderRequest) => sum + o.remainingQuantity, 0);
+  const idleTrucks = data.fleetVehicles.filter((v: FleetVehicle) => v.status === "IDLE").length;
+  const todayDispatched = data.dispatchRecords.reduce((sum: number, d: DispatchRecord) => sum + d.dispatchedQuantityCum, 0);
 
   return (
     <AppShell
