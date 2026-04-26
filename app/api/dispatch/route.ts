@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     await updateDatabase((draft) => {
       const order = draft.salesOrderRequests.find((o) => o.id === orderId);
       if (!order) throw new Error("Order not found.");
-      if (order.homePlantId !== plantId) throw new Error("Order belongs to a different plant.");
+      if (order.plantId !== plantId) throw new Error("Order belongs to a different plant.");
       if (order.status !== "SCHEDULE_APPROVED") throw new Error("Order is not approved for dispatch.");
 
       if (dispatchedQuantityCum > order.remainingQuantity) {

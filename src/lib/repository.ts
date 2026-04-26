@@ -1622,10 +1622,10 @@ export async function getBatcherDashboardData(user: User): Promise<BatcherDashbo
     user,
     plant,
     activeOrders: database.salesOrderRequests.filter(
-      (o) => o.homePlantId === plantId && o.status === "SCHEDULE_APPROVED" && o.remainingQuantity > 0
+      (o) => o.plantId === plantId && o.status === "SCHEDULE_APPROVED" && o.remainingQuantity > 0
     ),
     mixDesigns: database.mixDesigns?.filter((m) => m.plantId === plantId && m.isActive) ?? [],
-    fleetVehicles: database.fleetVehicles.filter((v) => v.homePlantId === plantId),
+    fleetVehicles: database.fleetVehicles.filter((v) => v.plantId === plantId),
     dispatchRecords: database.dispatchRecords?.filter((d) => d.plantId === plantId) ?? [],
   };
 }
