@@ -52,8 +52,8 @@ export async function POST(request: Request) {
         orderId: order.id,
         plantId,
         vehicleId: vehicle.id,
-        vehicleCode: vehicle.vehicleRegistrationNumber,
-        driverName: vehicle.assignedDriverName || "Unknown",
+        vehicleCode: vehicle.vehicleCode,
+        driverName: vehicle.driverName || "Unknown",
         dispatchedQuantityCum,
         returnedQuantityCum: 0,
         finalSuppliedCum: dispatchedQuantityCum,
@@ -86,7 +86,7 @@ export async function POST(request: Request) {
         entityType: "DISPATCH_RECORD",
         entityId: newRecord.id,
         action: "CREATED",
-        detail: `Dispatched ${dispatchedQuantityCum} CUM to Order ${orderId.slice(0, 8)} using vehicle ${vehicle.vehicleRegistrationNumber}`,
+        detail: `Dispatched ${dispatchedQuantityCum} CUM to Order ${orderId.slice(0, 8)} using vehicle ${vehicle.vehicleCode}`,
         createdAt: nowIso(),
       });
     });
