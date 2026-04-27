@@ -716,7 +716,12 @@ async function ensureFirebaseCollections(): Promise<Database> {
 
 export async function readDatabase(): Promise<Database> {
   if (await isFirebaseConfigured()) {
-    return ensureFirebaseCollections();
+    try {
+      return await ensureFirebaseCollections();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase read failed, falling back to local database: ${message}`);
+    }
   }
 
   await ensureDatabaseFile();
@@ -726,9 +731,14 @@ export async function readDatabase(): Promise<Database> {
 
 export async function writeDatabase(database: Database) {
   if (await isFirebaseConfigured()) {
-    // Legacy support, updateDatabase should be used for granular diffs
-    await syncAllToFirebase(database);
-    return;
+    try {
+      // Legacy support, updateDatabase should be used for granular diffs
+      await syncAllToFirebase(database);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase write failed, falling back to local database: ${message}`);
+    }
   }
 
   await ensureDatabaseFile();
@@ -737,72 +747,77 @@ export async function writeDatabase(database: Database) {
 
 export async function updateDatabase<T>(updater: (database: Database) => Promise<T> | T): Promise<T> {
   if (await isFirebaseConfigured()) {
-    // Instead of locking a giant transaction, we read the collections concurrently, run the updater, and then apply isolated diffs.
-    // This allows 100 concurrent users to write without Firestore locking errors.
-    const database = await ensureFirebaseCollections();
-    
-    // Create deep clones to diff later
-    const originalMaps = new Map<string, Map<string, any>>();
-    for (const collectionName of COLLECTION_NAMES) {
-      const list = (database[collectionName as keyof Database] || []) as any[];
-      const map = new Map<string, any>();
-      for (const item of list) {
-        if (item.id) map.set(item.id, JSON.stringify(item));
+    try {
+      // Instead of locking a giant transaction, we read the collections concurrently, run the updater, and then apply isolated diffs.
+      // This allows 100 concurrent users to write without Firestore locking errors.
+      const database = await ensureFirebaseCollections();
+      
+      // Create deep clones to diff later
+      const originalMaps = new Map<string, Map<string, any>>();
+      for (const collectionName of COLLECTION_NAMES) {
+        const list = (database[collectionName as keyof Database] || []) as any[];
+        const map = new Map<string, any>();
+        for (const item of list) {
+          if (item.id) map.set(item.id, JSON.stringify(item));
+        }
+        originalMaps.set(collectionName, map);
       }
-      originalMaps.set(collectionName, map);
-    }
 
-    const result = await updater(database);
-    
-    const firestore = await getFirebaseFirestore();
-    const rootCollection = getFirebaseRootPath();
-    let batch = firestore.batch();
-    let opCount = 0;
+      const result = await updater(database);
+      
+      const firestore = await getFirebaseFirestore();
+      const rootCollection = getFirebaseRootPath();
+      let batch = firestore.batch();
+      let opCount = 0;
 
-    for (const collectionName of COLLECTION_NAMES) {
-      const list = (database[collectionName as keyof Database] || []) as any[];
-      const oldMap = originalMaps.get(collectionName)!;
-      const refCol = firestore.collection(rootCollection).doc("collections").collection(collectionName);
+      for (const collectionName of COLLECTION_NAMES) {
+        const list = (database[collectionName as keyof Database] || []) as any[];
+        const oldMap = originalMaps.get(collectionName)!;
+        const refCol = firestore.collection(rootCollection).doc("collections").collection(collectionName);
 
-      const newIds = new Set<string>();
+        const newIds = new Set<string>();
 
-      for (const newItem of list) {
-        if (!newItem.id) continue;
-        newIds.add(newItem.id);
+        for (const newItem of list) {
+          if (!newItem.id) continue;
+          newIds.add(newItem.id);
 
-        const newStr = JSON.stringify(newItem);
-        const oldStr = oldMap.get(newItem.id);
+          const newStr = JSON.stringify(newItem);
+          const oldStr = oldMap.get(newItem.id);
 
-        if (newStr !== oldStr) {
-          batch.set(refCol.doc(newItem.id), newItem);
-          opCount++;
-          if (opCount >= 490) {
-            await batch.commit();
-            batch = firestore.batch(); // fresh batch after commit
-            opCount = 0;
+          if (newStr !== oldStr) {
+            batch.set(refCol.doc(newItem.id), newItem);
+            opCount++;
+            if (opCount >= 490) {
+              await batch.commit();
+              batch = firestore.batch(); // fresh batch after commit
+              opCount = 0;
+            }
+          }
+        }
+
+        // Check for deletions
+        for (const [oldId] of oldMap) {
+          if (!newIds.has(oldId)) {
+            batch.delete(refCol.doc(oldId));
+            opCount++;
+            if (opCount >= 490) {
+              await batch.commit();
+              batch = firestore.batch(); // fresh batch after commit
+              opCount = 0;
+            }
           }
         }
       }
 
-      // Check for deletions
-      for (const [oldId] of oldMap) {
-        if (!newIds.has(oldId)) {
-          batch.delete(refCol.doc(oldId));
-          opCount++;
-          if (opCount >= 490) {
-            await batch.commit();
-            batch = firestore.batch(); // fresh batch after commit
-            opCount = 0;
-          }
-        }
+      if (opCount > 0) {
+        await batch.commit();
       }
-    }
 
-    if (opCount > 0) {
-      await batch.commit();
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase update failed, falling back to local database: ${message}`);
     }
-
-    return result;
   }
 
   const database = await readDatabase();

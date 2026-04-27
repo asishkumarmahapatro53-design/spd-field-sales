@@ -70,24 +70,30 @@ async function getServiceAccount() {
 async function getFirebaseApp() {
   if (!firebaseInitPromise) {
     firebaseInitPromise = (async () => {
-      const existing = getApps()[0];
-      if (existing) {
-        return existing;
-      }
+      try {
+        const existing = getApps()[0];
+        if (existing) {
+          return existing;
+        }
 
-      const serviceAccount = await getServiceAccount();
-      if (!serviceAccount) {
+        const serviceAccount = await getServiceAccount();
+        if (!serviceAccount) {
+          return null;
+        }
+
+        return initializeApp({
+          credential: cert({
+            projectId: serviceAccount.projectId,
+            clientEmail: serviceAccount.clientEmail,
+            privateKey: serviceAccount.privateKey,
+          }),
+          storageBucket: process.env.FIREBASE_STORAGE_BUCKET?.trim() || undefined,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`Firebase initialization failed: ${message}`);
         return null;
       }
-
-      return initializeApp({
-        credential: cert({
-          projectId: serviceAccount.projectId,
-          clientEmail: serviceAccount.clientEmail,
-          privateKey: serviceAccount.privateKey,
-        }),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET?.trim() || undefined,
-      });
     })();
   }
 
