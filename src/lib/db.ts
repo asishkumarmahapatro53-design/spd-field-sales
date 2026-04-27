@@ -8,7 +8,7 @@ import type { Database, Lead, LeadSite, SiteVisit, StakeholderContact, User } fr
 import { nowIso, toDateKey } from "@/lib/date";
 import { getStakeholderLabel } from "@/lib/site-visit";
 
-const dataDir = path.join(process.cwd(), "data");
+const dataDir = process.env.NODE_ENV === "production" ? "/tmp/spd-data" : path.join(process.cwd(), "data");
 const dbPath = path.join(dataDir, "mock-db.json");
 const DEFAULT_PLANT_IDS = ["plant-a", "plant-b", "plant-c"] as const;
 

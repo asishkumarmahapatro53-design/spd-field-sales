@@ -19,8 +19,18 @@ export async function getLocationPayload() {
 }
 
 export async function parseApiError(response: Response) {
-  const payload = await response.json().catch(() => ({ error: "Request failed." }));
-  return payload.error ?? "Request failed.";
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return `Request failed (${response.status}).`;
+  }
+
+  try {
+    const payload = JSON.parse(text) as { error?: string };
+    return payload.error ?? `Request failed (${response.status}).`;
+  } catch {
+    return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+  }
 }
 
 export function toDateTimeLocalValue(value: string | null | undefined) {

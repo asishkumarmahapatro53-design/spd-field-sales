@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { getFirebaseStorageBucket, isFirebaseConfigured } from "@/lib/firebase-admin";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
-const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || "./runtime-uploads");
+const defaultStorageRoot = process.env.NODE_ENV === "production" ? "/tmp/runtime-uploads" : "./runtime-uploads";
+const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || defaultStorageRoot);
 
 function readEnv(...keys: string[]) {
   for (const key of keys) {

@@ -2,7 +2,8 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 
-const uploadRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || "./runtime-uploads");
+const defaultUploadRoot = process.env.NODE_ENV === "production" ? "/tmp/runtime-uploads" : "./runtime-uploads";
+const uploadRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || defaultUploadRoot);
 
 function getContentType(filePath: string) {
   const extension = path.extname(filePath).toLowerCase();
