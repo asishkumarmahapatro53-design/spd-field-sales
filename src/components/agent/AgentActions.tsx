@@ -15,8 +15,8 @@ import type { AgentDashboardData, ApprovalRequest, Lead, LeadSite, OdometerReadi
 
 type ActionSectionId = "odometer" | "site-visit" | "instant-price" | "approval" | "sales-order" | "schedule" | "help";
 
-const ODOMETER_UPLOAD_TARGET_BYTES = 32 * 1024;
-const ODOMETER_UPLOAD_HARD_LIMIT_BYTES = 40 * 1024;
+const ODOMETER_UPLOAD_TARGET_BYTES = 20 * 1024;
+const ODOMETER_UPLOAD_HARD_LIMIT_BYTES = 26 * 1024;
 
 interface AgentActionPanelProps {
   user: AgentDashboardData["user"];
@@ -210,16 +210,17 @@ function OdometerUploadCard({
 
     setBusy(true);
 
-    // Build FormData — same contract the API already expects
-    const formData = new FormData();
-    formData.set("type", readingType);
-    formData.set("photo", capturedFile, capturedFile.name);
-    formData.set("lat", capturedCoords ? String(capturedCoords.lat) : "");
-    formData.set("lng", capturedCoords ? String(capturedCoords.lng) : "");
-
     const response = await fetch("/api/odometer-readings", {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: readingType,
+        photoBase64: await fileToBase64(capturedFile),
+        photoName: capturedFile.name,
+        mimeType: capturedFile.type || "image/webp",
+        lat: capturedCoords ? String(capturedCoords.lat) : "",
+        lng: capturedCoords ? String(capturedCoords.lng) : "",
+      }),
     });
 
     if (!response.ok) {
@@ -324,10 +325,10 @@ function OdometerUploadCard({
           onCapture={handleCapture}
           compression={{
             maxDimension: 1280,
-            minDimension: 900,
+            minDimension: 720,
             targetMaxBytes: ODOMETER_UPLOAD_TARGET_BYTES,
-            initialQuality: 0.64,
-            minimumQuality: 0.3,
+            initialQuality: 0.58,
+            minimumQuality: 0.24,
             qualityStep: 0.07,
           }}
           disabled={busy}
@@ -373,6 +374,18 @@ function OdometerUploadCard({
       </button>
     </form>
   );
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      resolve(result.includes(",") ? result.split(",")[1] : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read photo."));
+    reader.readAsDataURL(file);
+  });
 }
 
 function toDateTimeLocalValue(value: string | null | undefined) {
