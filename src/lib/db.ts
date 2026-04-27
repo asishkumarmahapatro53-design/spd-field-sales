@@ -12,6 +12,20 @@ const dataDir = process.env.NODE_ENV === "production" ? "/tmp/spd-data" : path.j
 const dbPath = path.join(dataDir, "mock-db.json");
 const DEFAULT_PLANT_IDS = ["plant-a", "plant-b", "plant-c"] as const;
 
+function allowsEphemeralPersistence() {
+  return process.env.ALLOW_EPHEMERAL_PERSISTENCE?.trim().toLowerCase() === "true";
+}
+
+function canUseLocalDatabaseFallback() {
+  return process.env.NODE_ENV !== "production" || allowsEphemeralPersistence();
+}
+
+function requireDurableDatabase(context: string): never {
+  throw new Error(
+    `${context}: persistent database is unavailable. Configure Firebase Firestore for production instead of using disposable local storage.`,
+  );
+}
+
 function createUserSeed(employeeId: string, name: string, role: User["role"], password: string, homePlantId: string | null): User {
   return {
     id: randomUUID(),
@@ -737,8 +751,15 @@ export async function readDatabase(): Promise<Database> {
       return await ensureFirebaseCollections();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Firebase read failed, falling back to local database: ${message}`);
+      console.error(`Firebase read failed: ${message}`);
+      if (!canUseLocalDatabaseFallback()) {
+        requireDurableDatabase("Firebase read failed");
+      }
     }
+  }
+
+  if (!canUseLocalDatabaseFallback()) {
+    requireDurableDatabase("Firebase is not configured");
   }
 
   await ensureDatabaseFile();
@@ -754,8 +775,15 @@ export async function writeDatabase(database: Database) {
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Firebase write failed, falling back to local database: ${message}`);
+      console.error(`Firebase write failed: ${message}`);
+      if (!canUseLocalDatabaseFallback()) {
+        requireDurableDatabase("Firebase write failed");
+      }
     }
+  }
+
+  if (!canUseLocalDatabaseFallback()) {
+    requireDurableDatabase("Firebase is not configured");
   }
 
   await ensureDatabaseFile();
@@ -833,8 +861,15 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Firebase update failed, falling back to local database: ${message}`);
+      console.error(`Firebase update failed: ${message}`);
+      if (!canUseLocalDatabaseFallback()) {
+        requireDurableDatabase("Firebase update failed");
+      }
     }
+  }
+
+  if (!canUseLocalDatabaseFallback()) {
+    requireDurableDatabase("Firebase is not configured");
   }
 
   const database = await readDatabase();

@@ -7,6 +7,14 @@ import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from 
 const defaultStorageRoot = process.env.NODE_ENV === "production" ? "/tmp/runtime-uploads" : "./runtime-uploads";
 const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || defaultStorageRoot);
 
+function allowsEphemeralPersistence() {
+  return process.env.ALLOW_EPHEMERAL_PERSISTENCE?.trim().toLowerCase() === "true";
+}
+
+function canUseLocalUploadFallback() {
+  return process.env.NODE_ENV !== "production" || allowsEphemeralPersistence();
+}
+
 function readEnv(...keys: string[]) {
   for (const key of keys) {
     const value = process.env[key]?.trim();
@@ -317,6 +325,12 @@ export async function saveUploadedFile(file: File, buffer?: Buffer) {
       originalFileName: file.name || fileName,
       localAbsolutePath: null,
     };
+  }
+
+  if (!canUseLocalUploadFallback()) {
+    throw new Error(
+      "Durable upload storage is unavailable. Configure S3, Supabase Storage, or Firebase Storage for production.",
+    );
   }
 
   await mkdir(absoluteDir, { recursive: true });

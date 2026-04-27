@@ -12,6 +12,7 @@ frontend:
           const fs = require("fs");
 
           const keys = [
+            "ALLOW_EPHEMERAL_PERSISTENCE",
             "DISABLE_LOGIN",
             "FIREBASE_APP_STATE_COLLECTION",
             "FIREBASE_APP_STATE_DOC",

@@ -56,6 +56,8 @@ When Firebase is configured:
 - uploaded photos go to Firebase Storage
 - the existing employee ID/password login flow continues to work, now backed by Firebase-stored data
 
+Production deployments require durable persistence. If Firebase is not available, the app refuses to use local `/tmp` database storage unless `ALLOW_EPHEMERAL_PERSISTENCE="true"` is explicitly set for a throwaway demo.
+
 If you want to test with Firestore but keep uploads on the local machine, set:
 
 ```env
@@ -135,7 +137,7 @@ Render deployment notes:
 
 - Build command: `npm install && npm run build`
 - Start command: `npm run start -- -p $PORT`
-- Render free instances lose local filesystem changes, so do not use local uploads there
+- Render free instances lose local filesystem changes, so do not use local uploads there. Production now blocks local upload fallback unless `ALLOW_EPHEMERAL_PERSISTENCE="true"` is set for a disposable demo.
 
 This free path is good for demos and small pilot testing. For larger multi-user pilots, move app data out of the single Firestore document shape and keep using durable object storage.
 
