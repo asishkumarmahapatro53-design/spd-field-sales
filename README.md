@@ -52,11 +52,13 @@ You can also use `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_P
 
 When Firebase is configured:
 
-- app data is stored in a Firestore document
+- app data is stored in durable Firestore collections
 - uploaded photos go to Firebase Storage
 - the existing employee ID/password login flow continues to work, now backed by Firebase-stored data
 
 Production deployments require durable persistence. If Firebase is not available, the app refuses to use local `/tmp` database storage unless `ALLOW_EPHEMERAL_PERSISTENCE="true"` is explicitly set for a throwaway demo.
+
+Before every Amplify deployment, `npm run preflight:production` now validates the production-critical services. The deployment is blocked if Firestore cannot write/read/delete, if existing app data is not visible in the configured Firestore path, if S3 upload/CORS checks fail, if Gemini cannot be called, or if disposable `/tmp` persistence is enabled.
 
 If you want to test with Firestore but keep uploads on the local machine, set:
 
@@ -64,7 +66,7 @@ If you want to test with Firestore but keep uploads on the local machine, set:
 FIREBASE_USE_STORAGE="false"
 ```
 
-This Firebase adapter is designed for real workflow testing. It stores the current app state in one Firestore document for simplicity, which is fine for pilot testing but should be normalized into collections for production scale.
+This Firebase adapter is designed for real workflow testing. It stores the app state in Firestore collections under `FIREBASE_APP_STATE_COLLECTION`. Do not change `FIREBASE_PROJECT_ID`, `FIREBASE_FIRESTORE_DATABASE_ID`, or `FIREBASE_APP_STATE_COLLECTION` after real users start entering data unless you are intentionally migrating the data.
 
 ## Render + Supabase free path
 
@@ -92,9 +94,13 @@ FIREBASE_APP_STATE_DOC="main"
 GEMINI_API_KEY="your-gemini-api-key"
 GEMINI_CHAT_MODEL="gemini-2.5-flash-lite"
 GEMINI_OCR_MODEL="gemini-2.5-flash-lite"
+APP_ORIGIN="https://spdautomation.civilsai.in"
+SYSTEM_HEALTH_TOKEN="choose-a-long-random-token"
+PREFLIGHT_ALLOW_EMPTY_FIREBASE="false"
+PREFLIGHT_SKIP_GEMINI="false"
 ```
 
-For S3-backed uploads, this app accepts either naming style:
+For S3-backed uploads on Amplify, use explicit `S3_*` variables:
 
 ```env
 S3_BUCKET_NAME="your-bucket"
@@ -103,7 +109,7 @@ S3_ACCESS_KEY_ID="your-access-key"
 S3_SECRET_ACCESS_KEY="your-secret"
 ```
 
-or:
+For local development only, this app also accepts AWS-style aliases:
 
 ```env
 AWS_S3_BUCKET_NAME="your-bucket"
@@ -112,18 +118,26 @@ AWS_ACCESS_KEY_ID="your-access-key"
 AWS_SECRET_ACCESS_KEY="your-secret"
 ```
 
+Do not rely on `AWS_*` names in Amplify production. Amplify can reserve or inject AWS-prefixed variables, so the preflight requires explicit `S3_*` names unless `PREFLIGHT_ALLOW_AWS_S3_ALIASES="true"` is deliberately set.
+
 For direct mobile odometer uploads, the S3 bucket must allow browser PUT requests from the production domain. Example S3 CORS:
 
 ```json
 [
   {
-    "AllowedHeaders": ["content-type"],
-    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["content-type", "x-amz-*"],
+    "AllowedMethods": ["PUT", "HEAD"],
     "AllowedOrigins": ["https://spdautomation.civilsai.in"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 300
   }
 ]
+```
+
+After deployment, shallow health can be checked at `/api/system-health`. Deep checks require `SYSTEM_HEALTH_TOKEN`:
+
+```bash
+curl -H "Authorization: Bearer your-token" "https://spdautomation.civilsai.in/api/system-health?deep=1&gemini=1"
 ```
 
 Supabase bucket setup for this app:

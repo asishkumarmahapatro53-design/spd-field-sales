@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "preflight:production": "node scripts/preflight-production.mjs",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run"
