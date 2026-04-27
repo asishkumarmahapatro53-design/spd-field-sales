@@ -16,7 +16,18 @@ async function readServiceAccountFromFile() {
     return null;
   }
 
-  const raw = await readFile(jsonPath, "utf-8");
+  let raw: string;
+
+  try {
+    raw = await readFile(jsonPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
+
   const parsed = JSON.parse(raw) as {
     project_id?: string;
     client_email?: string;

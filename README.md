@@ -92,6 +92,24 @@ GEMINI_CHAT_MODEL="gemini-2.5-flash-lite"
 GEMINI_OCR_MODEL="gemini-2.5-flash-lite"
 ```
 
+For S3-backed uploads, this app accepts either naming style:
+
+```env
+S3_BUCKET_NAME="your-bucket"
+S3_REGION="your-region"
+S3_ACCESS_KEY_ID="your-access-key"
+S3_SECRET_ACCESS_KEY="your-secret"
+```
+
+or:
+
+```env
+AWS_S3_BUCKET_NAME="your-bucket"
+AWS_REGION="your-region"
+AWS_ACCESS_KEY_ID="your-access-key"
+AWS_SECRET_ACCESS_KEY="your-secret"
+```
+
 Supabase bucket setup for this app:
 
 - Create a bucket such as `spd-uploads`

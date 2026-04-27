@@ -6,12 +6,23 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || "./runtime-uploads");
 
+function readEnv(...keys: string[]) {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
 function shouldUseSupabaseStorage() {
   return process.env.SUPABASE_USE_STORAGE?.trim().toLowerCase() === "true";
 }
 
 function shouldUseS3Storage() {
-  return Boolean(process.env.S3_BUCKET_NAME?.trim());
+  return Boolean(readEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"));
 }
 
 function shouldUseFirebaseStorage() {
@@ -82,8 +93,8 @@ async function saveToSupabaseStorage(
 }
 
 async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, mimeType: string) {
-  const bucket = process.env.S3_BUCKET_NAME?.trim();
-  const region = process.env.S3_REGION?.trim() || "us-east-1";
+  const bucket = readEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME");
+  const region = readEnv("S3_REGION", "AWS_REGION") || "us-east-1";
 
   if (!bucket) {
     throw new Error("S3_BUCKET_NAME is not configured.");
@@ -92,8 +103,8 @@ async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, m
   const s3 = new S3Client({
     region,
     credentials: {
-      accessKeyId: process.env.S3_ACCESS_KEY_ID?.trim() || "",
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY?.trim() || "",
+      accessKeyId: readEnv("S3_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"),
+      secretAccessKey: readEnv("S3_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
     },
   });
 
