@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHmac, createHash, randomUUID } from "node:crypto";
 import { getFirebaseStorageBucket, isFirebaseConfigured } from "@/lib/firebase-admin";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 const defaultStorageRoot = process.env.NODE_ENV === "production" ? "/tmp/runtime-uploads" : "./runtime-uploads";
 const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || defaultStorageRoot);
@@ -24,6 +24,10 @@ function shouldUseSupabaseStorage() {
 
 function shouldUseS3Storage() {
   return Boolean(readEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME"));
+}
+
+export function isS3StorageConfigured() {
+  return shouldUseS3Storage();
 }
 
 function shouldUseFirebaseStorage() {
@@ -52,6 +56,81 @@ function buildSupabaseObjectPath(bucketPath: string) {
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join("/");
+}
+
+function getS3Config() {
+  const bucket = readEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME");
+  const region = readEnv("S3_REGION", "AWS_REGION") || "us-east-1";
+  const accessKeyId = readEnv("S3_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID");
+  const secretAccessKey = readEnv("S3_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY");
+  const sessionToken = readEnv("S3_SESSION_TOKEN", "AWS_SESSION_TOKEN");
+
+  if (!bucket) {
+    throw new Error("S3_BUCKET_NAME is not configured.");
+  }
+
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error("S3 access key and secret access key are required.");
+  }
+
+  return {
+    bucket,
+    region,
+    accessKeyId,
+    secretAccessKey,
+    sessionToken,
+    client: new S3Client({
+      region,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+        ...(sessionToken ? { sessionToken } : {}),
+      },
+    }),
+  };
+}
+
+function buildS3ObjectUrl(key: string, bucket: string, region: string) {
+  return `https://${bucket}.s3.${region}.amazonaws.com/${encodeS3Key(key)}`;
+}
+
+function encodeS3Key(key: string) {
+  return key
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function buildCanonicalQuery(query: Record<string, string>) {
+  return Object.entries(query)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, value]) => `${encodeRfc3986(key)}=${encodeRfc3986(value)}`)
+    .join("&");
+}
+
+function encodeRfc3986(value: string) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function toAmzDate(date: Date) {
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, "");
+}
+
+function hmacBuffer(key: Buffer | string, value: string) {
+  return createHmac("sha256", key).update(value).digest();
+}
+
+function hmacHex(key: Buffer | string, value: string) {
+  return createHmac("sha256", key).update(value).digest("hex");
+}
+
+function getSigningKey(secretAccessKey: string, dateStamp: string, region: string) {
+  const dateKey = hmacBuffer(`AWS4${secretAccessKey}`, dateStamp);
+  const regionKey = hmacBuffer(dateKey, region);
+  const serviceKey = hmacBuffer(regionKey, "s3");
+  return hmacBuffer(serviceKey, "aws4_request");
 }
 
 async function saveToSupabaseStorage(
@@ -94,20 +173,7 @@ async function saveToSupabaseStorage(
 }
 
 async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, mimeType: string) {
-  const bucket = readEnv("S3_BUCKET_NAME", "AWS_S3_BUCKET_NAME");
-  const region = readEnv("S3_REGION", "AWS_REGION") || "us-east-1";
-
-  if (!bucket) {
-    throw new Error("S3_BUCKET_NAME is not configured.");
-  }
-
-  const s3 = new S3Client({
-    region,
-    credentials: {
-      accessKeyId: readEnv("S3_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"),
-      secretAccessKey: readEnv("S3_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
-    },
-  });
+  const { bucket, region, client } = getS3Config();
 
   const command = new PutObjectCommand({
     Bucket: bucket,
@@ -116,13 +182,96 @@ async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, m
     ContentType: mimeType,
   });
 
-  await s3.send(command);
+  await client.send(command);
 
   return {
-    photoUrl: `https://${bucket}.s3.${region}.amazonaws.com/${bucketPath}`,
+    photoUrl: buildS3ObjectUrl(bucketPath, bucket, region),
     originalFileName: file.name || path.basename(bucketPath),
     localAbsolutePath: null,
   };
+}
+
+export async function createPresignedS3PutUrl(input: {
+  key: string;
+  contentType: string;
+  expiresInSeconds?: number;
+}) {
+  const { bucket, region, accessKeyId, secretAccessKey, sessionToken } = getS3Config();
+  const expiresInSeconds = Math.min(Math.max(input.expiresInSeconds ?? 300, 60), 600);
+  const now = new Date();
+  const amzDate = toAmzDate(now);
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const host = `${bucket}.s3.${region}.amazonaws.com`;
+  const signedHeaders = "content-type;host";
+  const credential = `${accessKeyId}/${scope}`;
+  const query: Record<string, string> = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": credential,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expiresInSeconds),
+    "X-Amz-SignedHeaders": signedHeaders,
+  };
+
+  if (sessionToken) {
+    query["X-Amz-Security-Token"] = sessionToken;
+  }
+
+  const canonicalUri = `/${encodeS3Key(input.key)}`;
+  const canonicalQuery = buildCanonicalQuery(query);
+  const canonicalHeaders = `content-type:${input.contentType}\nhost:${host}\n`;
+  const canonicalRequest = [
+    "PUT",
+    canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    "UNSIGNED-PAYLOAD",
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    scope,
+    createHash("sha256").update(canonicalRequest).digest("hex"),
+  ].join("\n");
+  const signature = hmacHex(getSigningKey(secretAccessKey, dateStamp, region), stringToSign);
+
+  return {
+    uploadUrl: `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`,
+    key: input.key,
+    photoUrl: buildS3ObjectUrl(input.key, bucket, region),
+    headers: {
+      "Content-Type": input.contentType,
+    },
+    expiresInSeconds,
+  };
+}
+
+export async function readS3ObjectBuffer(key: string, options?: { maxBytes?: number }) {
+  const { bucket, client } = getS3Config();
+  const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+
+  if (options?.maxBytes && head.ContentLength && head.ContentLength > options.maxBytes) {
+    throw new Error("The uploaded S3 object is larger than allowed.");
+  }
+
+  const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const bytes = await result.Body?.transformToByteArray();
+
+  if (!bytes) {
+    throw new Error("Could not read uploaded S3 object.");
+  }
+
+  return {
+    buffer: Buffer.from(bytes),
+    contentType: result.ContentType ?? null,
+    contentLength: result.ContentLength ?? null,
+  };
+}
+
+export function buildS3PublicUrl(key: string) {
+  const { bucket, region } = getS3Config();
+  return buildS3ObjectUrl(key, bucket, region);
 }
 
 export async function readUploadedFileBuffer(file: File) {

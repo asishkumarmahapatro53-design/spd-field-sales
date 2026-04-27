@@ -49,6 +49,9 @@ export const LUNCH_AMOUNT = 150;
 const OCR_ACCEPTANCE_CONFIDENCE = 0.55;
 const OTP_TTL_MS = 10 * 60 * 1000;
 const ACCEPTED_OCR_READING_KINDS = new Set(["ODO", "TOTAL", "TRIP"]);
+const MAX_ODOMETER_STORED_BYTES = 2 * 1024 * 1024;
+const MAX_SITE_VISIT_STORED_BYTES = 5 * 1024 * 1024;
+const MAX_SITE_VISIT_VOICE_STORED_BYTES = 10 * 1024 * 1024;
 
 function assertRole(user: User, allowed: User["role"][]) {
   if (!allowed.includes(user.role)) {
@@ -537,24 +540,41 @@ function getOrCreateReadingSession(
   return session;
 }
 
-export async function createOdometerReading(
-  user: User,
-  input: {
-    type: ReadingType;
-    file: File;
-    latLng: LatLng | null;
-  },
-) {
+type OdometerReadingInput = {
+  type: ReadingType;
+  latLng: LatLng | null;
+} & (
+  | {
+      file: File;
+      uploadedObject?: never;
+    }
+  | {
+      file?: never;
+      uploadedObject: {
+        s3Key: string;
+        originalFileName: string;
+        mimeType: string | null;
+        sizeBytes?: number | null;
+      };
+    }
+);
+
+type UploadedS3ObjectInput = {
+  s3Key: string;
+  originalFileName: string;
+  mimeType: string | null;
+  sizeBytes?: number | null;
+};
+
+export async function createOdometerReading(user: User, input: OdometerReadingInput) {
   assertRole(user, ["SALES_AGENT"]);
-  const { readUploadedFileBuffer, saveUploadedFile } = await import("@/lib/storage");
-  const fileBuffer = await readUploadedFileBuffer(input.file);
-  const upload = await saveUploadedFile(input.file, fileBuffer);
+  const { fileBuffer, upload, mimeType } = await prepareOdometerUpload(input);
   const ocr = await ocrService.extractOdometerValue({
     fileName: upload.originalFileName,
     localAbsolutePath: upload.localAbsolutePath,
     photoUrl: upload.photoUrl,
     inlineBytesBase64: fileBuffer.toString("base64"),
-    mimeType: input.file.type || null,
+    mimeType,
   });
   const hasExtractedTimestamp = Boolean(ocr.capturedAt);
   const capturedAt = ocr.capturedAt ?? nowIso();
@@ -622,6 +642,38 @@ export async function createOdometerReading(
 
     return reading;
   });
+}
+
+async function prepareOdometerUpload(input: OdometerReadingInput) {
+  if (input.file) {
+    const { readUploadedFileBuffer, saveUploadedFile } = await import("@/lib/storage");
+    const fileBuffer = await readUploadedFileBuffer(input.file);
+    const upload = await saveUploadedFile(input.file, fileBuffer);
+
+    return {
+      fileBuffer,
+      upload,
+      mimeType: input.file.type || null,
+    };
+  }
+
+  const { buildS3PublicUrl, readS3ObjectBuffer } = await import("@/lib/storage");
+  const uploadedObject = input.uploadedObject;
+  const object = await readS3ObjectBuffer(uploadedObject.s3Key, { maxBytes: MAX_ODOMETER_STORED_BYTES });
+
+  if (object.buffer.length > MAX_ODOMETER_STORED_BYTES) {
+    throw new Error("The odometer photo is too large. Please retake it closer to the dashboard.");
+  }
+
+  return {
+    fileBuffer: object.buffer,
+    upload: {
+      photoUrl: buildS3PublicUrl(uploadedObject.s3Key),
+      originalFileName: uploadedObject.originalFileName || uploadedObject.s3Key.split("/").at(-1) || "odometer.webp",
+      localAbsolutePath: null,
+    },
+    mimeType: uploadedObject.mimeType || object.contentType,
+  };
 }
 
 export async function confirmOdometerReading(user: User, readingId: string) {
@@ -798,7 +850,8 @@ function isSiteMetadataMissingError(input: {
 export async function createSiteVisit(
   user: User,
   input: {
-    file: File;
+    file?: File;
+    uploadedObject?: UploadedS3ObjectInput;
     leadId?: string | null;
     siteId?: string | null;
     siteName: string;
@@ -820,29 +873,30 @@ export async function createSiteVisit(
     photoCapturedAt: string | null;
     remarksText: string;
     remarksVoiceNoteFile?: File | null;
+    remarksVoiceNoteObject?: UploadedS3ObjectInput | null;
   },
 ) {
   assertRole(user, ["SALES_AGENT"]);
-  const { saveUploadedFile } = await import("@/lib/storage");
-  const upload = await saveUploadedFile(input.file);
+  const upload = await prepareSiteVisitUpload(input);
   const stakeholders = dedupeStakeholders(normalizeStakeholders(input.stakeholders));
   const metadataFallback =
     !input.photoWatermarkAddress.trim() || !input.photoCapturedAt || !input.detectedLatLng
       ? await ocrService.extractSiteVisitMetadata({
-          fileName: input.file.name,
+          fileName: upload.originalFileName,
           localAbsolutePath: upload.localAbsolutePath,
           photoUrl: upload.photoUrl,
-          mimeType: input.file.type || null,
+          inlineBytesBase64: upload.fileBuffer?.toString("base64"),
+          mimeType: upload.mimeType,
         })
       : null;
-  const remarksVoiceNoteUpload =
-    input.remarksVoiceNoteFile instanceof File ? await saveUploadedFile(input.remarksVoiceNoteFile) : null;
+  const remarksVoiceNoteUpload = await prepareSiteVisitVoiceNoteUpload(input);
   const transcript = remarksVoiceNoteUpload
     ? await ocrService.transcribeVoiceNote({
-        fileName: input.remarksVoiceNoteFile?.name || "voice-note",
+        fileName: remarksVoiceNoteUpload.originalFileName || "voice-note",
         localAbsolutePath: remarksVoiceNoteUpload.localAbsolutePath,
         photoUrl: remarksVoiceNoteUpload.photoUrl,
-        mimeType: input.remarksVoiceNoteFile?.type || null,
+        inlineBytesBase64: remarksVoiceNoteUpload.fileBuffer?.toString("base64"),
+        mimeType: remarksVoiceNoteUpload.mimeType,
       })
     : null;
   const remarksText = [input.remarksText.trim(), transcript?.text?.trim() || ""].filter(Boolean).join("\n\n");
@@ -1006,6 +1060,64 @@ export async function createSiteVisit(
     logAudit(database, user, "SiteVisit", visit.id, "CREATE", `Recorded site visit for ${site.siteName}.`);
     return visit;
   });
+}
+
+async function prepareSiteVisitUpload(input: { file?: File; uploadedObject?: UploadedS3ObjectInput }) {
+  if (input.file) {
+    const { saveUploadedFile } = await import("@/lib/storage");
+    const upload = await saveUploadedFile(input.file);
+
+    return {
+      ...upload,
+      fileBuffer: null,
+      mimeType: input.file.type || null,
+    };
+  }
+
+  if (!input.uploadedObject) {
+    throw new Error("Arrival photo is required.");
+  }
+
+  return prepareS3UploadedObject(input.uploadedObject, MAX_SITE_VISIT_STORED_BYTES);
+}
+
+async function prepareSiteVisitVoiceNoteUpload(input: {
+  remarksVoiceNoteFile?: File | null;
+  remarksVoiceNoteObject?: UploadedS3ObjectInput | null;
+}) {
+  if (input.remarksVoiceNoteFile instanceof File) {
+    const { saveUploadedFile } = await import("@/lib/storage");
+    const upload = await saveUploadedFile(input.remarksVoiceNoteFile);
+
+    return {
+      ...upload,
+      fileBuffer: null,
+      mimeType: input.remarksVoiceNoteFile.type || null,
+    };
+  }
+
+  if (!input.remarksVoiceNoteObject) {
+    return null;
+  }
+
+  return prepareS3UploadedObject(input.remarksVoiceNoteObject, MAX_SITE_VISIT_VOICE_STORED_BYTES);
+}
+
+async function prepareS3UploadedObject(uploadedObject: UploadedS3ObjectInput, maxBytes: number) {
+  const { buildS3PublicUrl, readS3ObjectBuffer } = await import("@/lib/storage");
+  const object = await readS3ObjectBuffer(uploadedObject.s3Key, { maxBytes });
+
+  if (object.buffer.length > maxBytes) {
+    throw new Error("The uploaded file is larger than allowed.");
+  }
+
+  return {
+    photoUrl: buildS3PublicUrl(uploadedObject.s3Key),
+    originalFileName: uploadedObject.originalFileName || uploadedObject.s3Key.split("/").at(-1) || "upload",
+    localAbsolutePath: null,
+    fileBuffer: object.buffer,
+    mimeType: uploadedObject.mimeType || object.contentType,
+  };
 }
 
 export async function listLeads(user: User) {

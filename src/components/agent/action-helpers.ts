@@ -1,5 +1,14 @@
 "use client";
 
+export type DirectUploadPurpose = "odometer" | "site-visit" | "site-visit-voice";
+
+export interface PresignedUploadPayload {
+  uploadUrl: string;
+  key: string;
+  headers: Record<string, string>;
+  originalFileName: string;
+}
+
 export async function getLocationPayload() {
   if (typeof navigator === "undefined" || !navigator.geolocation) {
     return { lat: "", lng: "" };
@@ -16,6 +25,42 @@ export async function getLocationPayload() {
       { enableHighAccuracy: true, timeout: 8000 },
     );
   });
+}
+
+export async function uploadDirectFile(file: File, purpose: DirectUploadPurpose) {
+  const presignResponse = await fetch("/api/uploads/presign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      purpose,
+      fileName: file.name,
+      mimeType: file.type || (purpose === "site-visit-voice" ? "audio/webm" : "image/webp"),
+      sizeBytes: file.size,
+    }),
+  });
+
+  if (!presignResponse.ok) {
+    throw new Error(await parseApiError(presignResponse));
+  }
+
+  const upload = (await presignResponse.json()) as PresignedUploadPayload;
+  let s3Response: Response;
+
+  try {
+    s3Response = await fetch(upload.uploadUrl, {
+      method: "PUT",
+      headers: upload.headers,
+      body: file,
+    });
+  } catch {
+    throw new Error("File upload to S3 could not start. Check S3 CORS for this domain and try again.");
+  }
+
+  if (!s3Response.ok) {
+    throw new Error(`File upload to S3 failed (${s3Response.status}). Check S3 CORS and try again.`);
+  }
+
+  return upload;
 }
 
 export async function parseApiError(response: Response) {

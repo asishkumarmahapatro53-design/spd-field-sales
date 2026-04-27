@@ -110,6 +110,20 @@ AWS_ACCESS_KEY_ID="your-access-key"
 AWS_SECRET_ACCESS_KEY="your-secret"
 ```
 
+For direct mobile odometer uploads, the S3 bucket must allow browser PUT requests from the production domain. Example S3 CORS:
+
+```json
+[
+  {
+    "AllowedHeaders": ["content-type"],
+    "AllowedMethods": ["PUT"],
+    "AllowedOrigins": ["https://spdautomation.civilsai.in"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 300
+  }
+]
+```
+
 Supabase bucket setup for this app:
 
 - Create a bucket such as `spd-uploads`

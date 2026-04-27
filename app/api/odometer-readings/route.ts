@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     const user = await requireApiUser(["SALES_AGENT"]);
     const contentType = request.headers.get("content-type") ?? "";
     const input = contentType.includes("application/json")
-      ? await parseJsonOdometerPayload(request)
+      ? await parseJsonOdometerPayload(request, user.id)
       : await parseFormOdometerPayload(request);
 
     const reading = await createOdometerReading(user, input);
@@ -41,16 +41,37 @@ async function parseFormOdometerPayload(request: Request) {
   };
 }
 
-async function parseJsonOdometerPayload(request: Request) {
+async function parseJsonOdometerPayload(request: Request, userId: string) {
   const payload = (await request.json()) as {
     type?: string;
     photoBase64?: string;
     photoName?: string;
     mimeType?: string;
+    s3Key?: string;
+    sizeBytes?: number;
     lat?: string;
     lng?: string;
   };
   const type = requireString(payload.type, "Reading type is required.") as ReadingType;
+  const latLng = parseLatLng({
+    lat: payload.lat,
+    lng: payload.lng,
+  });
+
+  if (payload.s3Key) {
+    const s3Key = validateOdometerS3Key(payload.s3Key, userId);
+    return {
+      type,
+      uploadedObject: {
+        s3Key,
+        originalFileName: sanitizeFileName(payload.photoName) || s3Key.split("/").at(-1) || "odometer.webp",
+        mimeType: payload.mimeType?.trim() || null,
+        sizeBytes: Number.isFinite(payload.sizeBytes) ? Number(payload.sizeBytes) : null,
+      },
+      latLng,
+    };
+  }
+
   const photoBase64 = requireString(payload.photoBase64, "An odometer photo is required.").replace(
     /^data:[^;]+;base64,/,
     "",
@@ -72,13 +93,25 @@ async function parseJsonOdometerPayload(request: Request) {
   return {
     type,
     file,
-    latLng: parseLatLng({
-      lat: payload.lat,
-      lng: payload.lng,
-    }),
+    latLng,
   };
 }
 
 function sanitizeFileName(value: string | null | undefined) {
   return value?.trim().replace(/[^\w.-]/g, "_").slice(0, 120) ?? "";
+}
+
+function validateOdometerS3Key(value: string, userId: string) {
+  const key = requireString(value, "Uploaded odometer photo is required.");
+  const expectedPrefix = `uploads/odometer/${sanitizePathSegment(userId)}/`;
+
+  if (!key.startsWith(expectedPrefix) || key.includes("..")) {
+    throw new ApiError(400, "Uploaded odometer photo path is not allowed.");
+  }
+
+  return key;
+}
+
+function sanitizePathSegment(value: string) {
+  return value.replace(/[^\w.-]/g, "_").slice(0, 80) || "user";
 }

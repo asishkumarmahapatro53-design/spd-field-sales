@@ -10,13 +10,13 @@ import {
   SalesOrderRequestCard as CommercialSalesOrderRequestCard,
   ScheduleRequestCard as CommercialScheduleRequestCard,
 } from "@/components/agent/CommercialRequestCards";
-import { parseApiError } from "@/components/agent/action-helpers";
+import { parseApiError, uploadDirectFile } from "@/components/agent/action-helpers";
 import type { AgentDashboardData, ApprovalRequest, Lead, LeadSite, OdometerReading, SalesOrderRequest } from "@/lib/types";
 
 type ActionSectionId = "odometer" | "site-visit" | "instant-price" | "approval" | "sales-order" | "schedule" | "help";
 
-const ODOMETER_UPLOAD_TARGET_BYTES = 20 * 1024;
-const ODOMETER_UPLOAD_HARD_LIMIT_BYTES = 26 * 1024;
+const ODOMETER_UPLOAD_TARGET_BYTES = 450 * 1024;
+const ODOMETER_UPLOAD_HARD_LIMIT_BYTES = 2 * 1024 * 1024;
 
 interface AgentActionPanelProps {
   user: AgentDashboardData["user"];
@@ -210,51 +210,56 @@ function OdometerUploadCard({
 
     setBusy(true);
 
-    const response = await fetch("/api/odometer-readings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: readingType,
-        photoBase64: await fileToBase64(capturedFile),
-        photoName: capturedFile.name,
-        mimeType: capturedFile.type || "image/webp",
-        lat: capturedCoords ? String(capturedCoords.lat) : "",
-        lng: capturedCoords ? String(capturedCoords.lng) : "",
-      }),
-    });
+    try {
+      const upload = await uploadDirectFile(capturedFile, "odometer");
+      const response = await fetch("/api/odometer-readings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: readingType,
+          s3Key: upload.key,
+          photoName: upload.originalFileName || capturedFile.name,
+          mimeType: capturedFile.type || "image/webp",
+          sizeBytes: capturedFile.size,
+          lat: capturedCoords ? String(capturedCoords.lat) : "",
+          lng: capturedCoords ? String(capturedCoords.lng) : "",
+        }),
+      });
 
-    if (!response.ok) {
-      setError(await parseApiError(response));
-      setBusy(false);
-      return;
-    }
+      if (!response.ok) {
+        setError(await parseApiError(response));
+        return;
+      }
 
-    const payload = (await response.json()) as { reading?: OdometerReading };
-    // Reset camera state after successful upload
-    setCapturedFile(null);
-    setCapturedCoords(null);
-    setReadingType("");
-    setBusy(false);
+      const payload = (await response.json()) as { reading?: OdometerReading };
+      setCapturedFile(null);
+      setCapturedCoords(null);
+      setReadingType("");
 
-    if (payload.reading?.status === "AWAITING_CONFIRMATION") {
-      setPendingReading(payload.reading);
-      setMessage(payload.reading.verificationNote || "OCR finished. Confirm the extracted value before it moves into today's log.");
-      return;
-    }
+      if (payload.reading?.status === "AWAITING_CONFIRMATION") {
+        setPendingReading(payload.reading);
+        setMessage(payload.reading.verificationNote || "OCR finished. Confirm the extracted value before it moves into today's log.");
+        return;
+      }
 
-    if (payload.reading?.status === "OCR_PENDING") {
+      if (payload.reading?.status === "OCR_PENDING") {
+        setPendingReading(null);
+        setMessage("Upload received. OCR is still processing and will appear in Needs Action soon.");
+        startTransition(() => router.refresh());
+        return;
+      }
+
       setPendingReading(null);
-      setMessage("Upload received. OCR is still processing and will appear in Needs Action soon.");
+      setMessage(
+        payload.reading?.verificationNote ||
+          "AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.",
+      );
       startTransition(() => router.refresh());
-      return;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Photo upload failed. Please try again.");
+    } finally {
+      setBusy(false);
     }
-
-    setPendingReading(null);
-    setMessage(
-      payload.reading?.verificationNote ||
-        "AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.",
-    );
-    startTransition(() => router.refresh());
   }
 
   async function confirmReading() {
@@ -315,7 +320,7 @@ function OdometerUploadCard({
         </select>
       </div>
 
-      {/* Step 2: Smart GPS Camera — forces rear camera, auto-watermarks */}
+      {/* Step 2: Smart GPS Camera, rear camera, auto-watermark */}
       <div className="field">
         <label>Odometer Photo</label>
         <GpsCamera
@@ -324,18 +329,18 @@ function OdometerUploadCard({
           employeeId={employeeId}
           onCapture={handleCapture}
           compression={{
-            maxDimension: 1280,
-            minDimension: 720,
+            maxDimension: 1600,
+            minDimension: 1000,
             targetMaxBytes: ODOMETER_UPLOAD_TARGET_BYTES,
-            initialQuality: 0.58,
-            minimumQuality: 0.24,
+            initialQuality: 0.72,
+            minimumQuality: 0.38,
             qualityStep: 0.07,
           }}
           disabled={busy}
         />
         {capturedFile && (
           <span className="hint">
-            ✅ Photo ready: {capturedFile.name} ({(capturedFile.size / 1024).toFixed(0)} KB)
+            Photo ready: {capturedFile.name} ({(capturedFile.size / 1024).toFixed(0)} KB)
           </span>
         )}
         {!capturedFile && (
@@ -374,18 +379,6 @@ function OdometerUploadCard({
       </button>
     </form>
   );
-}
-
-function fileToBase64(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      resolve(result.includes(",") ? result.split(",")[1] : result);
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read photo."));
-    reader.readAsDataURL(file);
-  });
 }
 
 function toDateTimeLocalValue(value: string | null | undefined) {

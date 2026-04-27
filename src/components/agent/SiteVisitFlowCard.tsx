@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { GpsCamera } from "@/components/agent/GpsCamera";
-import { getLocationPayload, parseApiError, toDateTimeLocalValue } from "@/components/agent/action-helpers";
+import { getLocationPayload, parseApiError, toDateTimeLocalValue, uploadDirectFile, type PresignedUploadPayload } from "@/components/agent/action-helpers";
 import { reverseGeocode } from "@/lib/image-utils";
 import { EXPECTED_SUPPLY_OPTIONS, getLocationVerification, getStakeholderLabel, STAKEHOLDER_OPTIONS, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import type { ExpectedSupplyWindow, Lead, LeadSite, LeadStage, SiteLocationVerificationStatus, StakeholderContact, StakeholderRole } from "@/lib/types";
@@ -112,6 +112,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
   const [arrivalPhoto, setArrivalPhoto] = useState<File | null>(null);
+  const [arrivalPhotoUpload, setArrivalPhotoUpload] = useState<PresignedUploadPayload | null>(null);
   const [arrivalPhotoCoords, setArrivalPhotoCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [leadStage, setLeadStage] = useState<LeadStage>("TALKS");
   const [leadStageEdited, setLeadStageEdited] = useState(false);
@@ -202,6 +203,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     setAnalysis(null);
     setAnalysisError("");
     setArrivalPhoto(null);
+    setArrivalPhotoUpload(null);
     setArrivalPhotoCoords(null);
     setSiteAddressEdited(false);
     setSiteAddress(usingExistingSite ? selectedSite?.siteAddress ?? "" : "");
@@ -223,16 +225,18 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     }
   }, [nextFollowUpEdited, suggestedFollowUpAt]);
 
-  async function analyzePhoto(file: File) {
+  async function analyzePhoto(upload: PresignedUploadPayload, file: File) {
     setAnalysisBusy(true);
     setAnalysisError("");
 
-    const formData = new FormData();
-    formData.set("photo", file);
-
     const response = await fetch("/api/site-visit-analysis", {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        s3Key: upload.key,
+        photoName: upload.originalFileName || file.name,
+        mimeType: file.type || "image/webp",
+      }),
     });
 
     if (!response.ok) {
@@ -255,6 +259,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
 
   async function handleArrivalPhotoCapture(file: File, coords: { lat: number; lng: number } | null) {
     setArrivalPhoto(file);
+    setArrivalPhotoUpload(null);
     setArrivalPhotoCoords(coords);
 
     if (!usingExistingSite && coords && !siteAddressEdited) {
@@ -264,7 +269,16 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       }
     }
 
-    await analyzePhoto(file);
+    setAnalysisBusy(true);
+    try {
+      const upload = await uploadDirectFile(file, "site-visit");
+      setArrivalPhotoUpload(upload);
+      await analyzePhoto(upload, file);
+    } catch (error) {
+      setAnalysis(null);
+      setAnalysisError(error instanceof Error ? error.message : "Site photo upload failed. Please try again.");
+      setAnalysisBusy(false);
+    }
   }
 
   function updateSupplierInput(index: number, value: string) {
@@ -323,56 +337,84 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       return;
     }
 
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-    const location = arrivalPhotoCoords
-      ? { lat: String(arrivalPhotoCoords.lat), lng: String(arrivalPhotoCoords.lng) }
-      : await getLocationPayload();
-    formData.set("lat", location.lat);
-    formData.set("lng", location.lng);
-    formData.set("arrivalPhoto", arrivalPhoto, arrivalPhoto.name);
-    formData.set("leadId", visitMode === "EXISTING_LEAD" ? leadId : "");
-    formData.set("siteId", usingExistingSite && selectedSite ? selectedSite.id : "");
-    formData.set("siteName", usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim());
-    formData.set("siteAddress", usingExistingSite && selectedSite ? selectedSite.siteAddress : siteAddress.trim());
-    formData.set("stakeholders", JSON.stringify(encounteredStakeholders));
-    formData.set("currentSupplier", currentSupplier);
-    formData.set("expectedSupplyWindow", expectedSupplyWindow);
-    formData.set("leadStage", leadStage);
-    formData.set("nextFollowUpAt", nextFollowUpAt);
-    formData.set("score", String(suggestedScore));
-    formData.set("photoWatermarkAddress", analysis?.siteAddress ?? siteAddress.trim());
-    formData.set("photoCapturedAt", analysis?.capturedAt ?? "");
-    formData.set("detectedLat", analysis?.latLng ? String(analysis.latLng.lat) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lat) : "");
-    formData.set("detectedLng", analysis?.latLng ? String(analysis.latLng.lng) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lng) : "");
+    try {
+      const form = event.currentTarget;
+      const formData = new FormData(form);
+      const remarksVoiceNote = formData.get("remarksVoiceNote");
+      const directArrivalUpload = arrivalPhotoUpload ?? (await uploadDirectFile(arrivalPhoto, "site-visit"));
+      const directVoiceUpload =
+        remarksVoiceNote instanceof File && remarksVoiceNote.size > 0
+          ? await uploadDirectFile(remarksVoiceNote, "site-visit-voice")
+          : null;
+      const location = arrivalPhotoCoords
+        ? { lat: String(arrivalPhotoCoords.lat), lng: String(arrivalPhotoCoords.lng) }
+        : await getLocationPayload();
 
-    const response = await fetch("/api/site-visits", {
-      method: "POST",
-      body: formData,
-    });
+      const response = await fetch("/api/site-visits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          arrivalPhotoS3Key: directArrivalUpload.key,
+          arrivalPhotoName: directArrivalUpload.originalFileName || arrivalPhoto.name,
+          arrivalPhotoMimeType: arrivalPhoto.type || "image/webp",
+          arrivalPhotoSizeBytes: arrivalPhoto.size,
+          remarksVoiceNoteS3Key: directVoiceUpload?.key ?? "",
+          remarksVoiceNoteName:
+            directVoiceUpload?.originalFileName || (remarksVoiceNote instanceof File ? remarksVoiceNote.name : ""),
+          remarksVoiceNoteMimeType:
+            remarksVoiceNote instanceof File && remarksVoiceNote.size > 0 ? remarksVoiceNote.type || "audio/webm" : "",
+          remarksVoiceNoteSizeBytes:
+            remarksVoiceNote instanceof File && remarksVoiceNote.size > 0 ? remarksVoiceNote.size : "",
+          lat: location.lat,
+          lng: location.lng,
+          leadId: visitMode === "EXISTING_LEAD" ? leadId : "",
+          siteId: usingExistingSite && selectedSite ? selectedSite.id : "",
+          siteName: usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim(),
+          siteAddress: usingExistingSite && selectedSite ? selectedSite.siteAddress : siteAddress.trim(),
+          stakeholders: JSON.stringify(encounteredStakeholders),
+          concreteGrade: formData.get("concreteGrade"),
+          quantityCum: formData.get("quantityCum"),
+          stageOfWork: formData.get("stageOfWork"),
+          futureScope: formData.get("futureScope"),
+          remarksText: formData.get("remarksText"),
+          currentSupplier,
+          expectedSupplyWindow,
+          leadStage,
+          nextFollowUpAt,
+          score: String(suggestedScore),
+          photoWatermarkAddress: analysis?.siteAddress ?? siteAddress.trim(),
+          photoCapturedAt: analysis?.capturedAt ?? "",
+          detectedLat: analysis?.latLng ? String(analysis.latLng.lat) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lat) : "",
+          detectedLng: analysis?.latLng ? String(analysis.latLng.lng) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lng) : "",
+        }),
+      });
 
-    if (!response.ok) {
-      setError(await parseApiError(response));
+      if (!response.ok) {
+        setError(await parseApiError(response));
+        return;
+      }
+
+      form.reset();
+      setFeedback("Site visit recorded and lead/site summary updated.");
+      setError("");
+      setAnalysis(null);
+      setArrivalPhoto(null);
+      setArrivalPhotoUpload(null);
+      setArrivalPhotoCoords(null);
+      setSiteAddress("");
+      setSiteName("");
+      setSelectedKnownStakeholderKeys([]);
+      setFoundNoOne(false);
+      setNewStakeholders([createStakeholderDraft()]);
+      setSiteAddressEdited(false);
+      setLeadStageEdited(false);
+      setNextFollowUpEdited(false);
+      startTransition(() => router.refresh());
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Site visit upload failed. Please try again.");
+    } finally {
       setBusy(false);
-      return;
     }
-
-    form.reset();
-    setFeedback("Site visit recorded and lead/site summary updated.");
-    setError("");
-    setAnalysis(null);
-    setArrivalPhoto(null);
-    setArrivalPhotoCoords(null);
-    setSiteAddress("");
-    setSiteName("");
-    setSelectedKnownStakeholderKeys([]);
-    setFoundNoOne(false);
-    setNewStakeholders([createStakeholderDraft()]);
-    setSiteAddressEdited(false);
-    setLeadStageEdited(false);
-    setNextFollowUpEdited(false);
-    setBusy(false);
-    startTransition(() => router.refresh());
   }
 
   return (
