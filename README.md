@@ -88,6 +88,8 @@ FIREBASE_USE_STORAGE="false"
 FIREBASE_APP_STATE_COLLECTION="app_state"
 FIREBASE_APP_STATE_DOC="main"
 GEMINI_API_KEY="your-gemini-api-key"
+GEMINI_CHAT_MODEL="gemini-2.5-flash-lite"
+GEMINI_OCR_MODEL="gemini-2.5-flash-lite"
 ```
 
 Supabase bucket setup for this app:
@@ -95,6 +97,7 @@ Supabase bucket setup for this app:
 - Create a bucket such as `spd-uploads`
 - Mark it as `public`
 - Keep the `service role key` server-side only; never expose it in browser code
+- If a Gemini model returns quota errors, switch `GEMINI_CHAT_MODEL` to a model your project can call instead of relying on the default
 
 Render deployment notes:
 

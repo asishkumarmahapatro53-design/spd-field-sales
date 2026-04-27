@@ -5,7 +5,6 @@
  * a fixed set of "tool functions" (sandboxed API actions).
  */
 
-const GEMINI_CHAT_MODEL = "gemini-2.0-flash";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 export interface ChatMessage {
@@ -28,6 +27,34 @@ export interface AgentContext {
 
 function getApiKey() {
   return process.env.GEMINI_API_KEY?.trim() || null;
+}
+
+function getChatModel() {
+  return (
+    process.env.GEMINI_CHAT_MODEL?.trim() ||
+    process.env.GEMINI_OCR_MODEL?.trim() ||
+    "gemini-2.5-flash-lite"
+  );
+}
+
+function summarizeApiFailure(status: number, rawBody: string) {
+  const normalizedBody = rawBody.replace(/\s+/g, " ").trim();
+
+  try {
+    const parsed = JSON.parse(rawBody) as {
+      error?: {
+        message?: string;
+      };
+    };
+    const message = parsed.error?.message?.trim();
+    if (message) {
+      return `Gemini chat ${status}: ${message}`;
+    }
+  } catch {
+    // Fall back to the raw body preview below.
+  }
+
+  return `Gemini chat ${status}: ${normalizedBody.slice(0, 240) || "Unknown API error."}`;
 }
 
 function buildSystemPrompt(ctx: AgentContext): string {
@@ -87,12 +114,15 @@ RULES:
 export async function callGeminiChat(
   history: ChatMessage[],
   ctx: AgentContext,
-): Promise<{ text: string; actionBlock: string | null } | null> {
+): Promise<{ text: string; actionBlock: string | null }> {
   const apiKey = getApiKey();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not configured on the server.");
+  }
 
   // Convert history to Gemini "contents" format
   const systemPrompt = buildSystemPrompt(ctx);
+  const model = getChatModel();
 
   // We prepend the system prompt as the first "user" message (Gemini Flash supports system instructions natively)
   const contents = history.map((msg) => ({
@@ -101,7 +131,7 @@ export async function callGeminiChat(
   }));
 
   const response = await fetch(
-    `${GEMINI_API_BASE}/${GEMINI_CHAT_MODEL}:generateContent`,
+    `${GEMINI_API_BASE}/${model}:generateContent`,
     {
       method: "POST",
       headers: {
@@ -122,8 +152,8 @@ export async function callGeminiChat(
   );
 
   if (!response.ok) {
-    console.error("Gemini chat error:", response.status, await response.text());
-    return null;
+    const rawBody = await response.text();
+    throw new Error(summarizeApiFailure(response.status, rawBody));
   }
 
   const data = (await response.json()) as {
@@ -133,7 +163,9 @@ export async function callGeminiChat(
   };
 
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  if (!text) return null;
+  if (!text) {
+    throw new Error(`Gemini chat returned an empty response for model ${model}.`);
+  }
 
   // Extract action block if present
   const actionMatch = text.match(/<<<ACTION>>>([\s\S]*?)<<<END_ACTION>>>/);

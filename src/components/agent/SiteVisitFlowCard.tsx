@@ -2,11 +2,15 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { GpsCamera } from "@/components/agent/GpsCamera";
 import { getLocationPayload, parseApiError, toDateTimeLocalValue } from "@/components/agent/action-helpers";
+import { reverseGeocode } from "@/lib/image-utils";
 import { EXPECTED_SUPPLY_OPTIONS, getLocationVerification, getStakeholderLabel, STAKEHOLDER_OPTIONS, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import type { ExpectedSupplyWindow, Lead, LeadSite, LeadStage, SiteLocationVerificationStatus, StakeholderContact, StakeholderRole } from "@/lib/types";
 
 interface SiteVisitFlowCardProps {
+  agentName: string;
+  employeeId: string;
   leads: Lead[];
   leadSites: LeadSite[];
 }
@@ -85,7 +89,7 @@ function toStakeholderPayload(stakeholders: StakeholderDraft[], selectedKnownSta
   return payload;
 }
 
-export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) {
+export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: SiteVisitFlowCardProps) {
   const router = useRouter();
   const [isRefreshing, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);
@@ -107,6 +111,8 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
   const [analysis, setAnalysis] = useState<SiteVisitAnalysis | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [arrivalPhoto, setArrivalPhoto] = useState<File | null>(null);
+  const [arrivalPhotoCoords, setArrivalPhotoCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [leadStage, setLeadStage] = useState<LeadStage>("TALKS");
   const [leadStageEdited, setLeadStageEdited] = useState(false);
   const [nextFollowUpAt, setNextFollowUpAt] = useState(toDateTimeLocalValue(suggestNextFollowUp({ expectedSupplyWindow: "WITHIN_15_DAYS" })));
@@ -195,6 +201,8 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
   useEffect(() => {
     setAnalysis(null);
     setAnalysisError("");
+    setArrivalPhoto(null);
+    setArrivalPhotoCoords(null);
     setSiteAddressEdited(false);
     setSiteAddress(usingExistingSite ? selectedSite?.siteAddress ?? "" : "");
     setSiteName(usingExistingSite ? selectedSite?.siteName ?? "" : "");
@@ -245,6 +253,20 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
     setAnalysisBusy(false);
   }
 
+  async function handleArrivalPhotoCapture(file: File, coords: { lat: number; lng: number } | null) {
+    setArrivalPhoto(file);
+    setArrivalPhotoCoords(coords);
+
+    if (!usingExistingSite && coords && !siteAddressEdited) {
+      const geocodedAddress = await reverseGeocode(coords.lat, coords.lng).catch(() => null);
+      if (geocodedAddress) {
+        setSiteAddress(geocodedAddress);
+      }
+    }
+
+    await analyzePhoto(file);
+  }
+
   function updateSupplierInput(index: number, value: string) {
     setSupplierInputs((current) => current.map((entry, currentIndex) => (currentIndex === index ? value : entry)));
   }
@@ -276,6 +298,12 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
       return;
     }
 
+    if (!arrivalPhoto) {
+      setError("Please capture the site visit photo first.");
+      setBusy(false);
+      return;
+    }
+
     if (!usingExistingSite && !siteName.trim()) {
       setError("Site name is required.");
       setBusy(false);
@@ -297,9 +325,12 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
 
     const form = event.currentTarget;
     const formData = new FormData(form);
-    const location = await getLocationPayload();
+    const location = arrivalPhotoCoords
+      ? { lat: String(arrivalPhotoCoords.lat), lng: String(arrivalPhotoCoords.lng) }
+      : await getLocationPayload();
     formData.set("lat", location.lat);
     formData.set("lng", location.lng);
+    formData.set("arrivalPhoto", arrivalPhoto, arrivalPhoto.name);
     formData.set("leadId", visitMode === "EXISTING_LEAD" ? leadId : "");
     formData.set("siteId", usingExistingSite && selectedSite ? selectedSite.id : "");
     formData.set("siteName", usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim());
@@ -310,10 +341,10 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
     formData.set("leadStage", leadStage);
     formData.set("nextFollowUpAt", nextFollowUpAt);
     formData.set("score", String(suggestedScore));
-    formData.set("photoWatermarkAddress", analysis?.siteAddress ?? "");
+    formData.set("photoWatermarkAddress", analysis?.siteAddress ?? siteAddress.trim());
     formData.set("photoCapturedAt", analysis?.capturedAt ?? "");
-    formData.set("detectedLat", analysis?.latLng ? String(analysis.latLng.lat) : "");
-    formData.set("detectedLng", analysis?.latLng ? String(analysis.latLng.lng) : "");
+    formData.set("detectedLat", analysis?.latLng ? String(analysis.latLng.lat) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lat) : "");
+    formData.set("detectedLng", analysis?.latLng ? String(analysis.latLng.lng) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lng) : "");
 
     const response = await fetch("/api/site-visits", {
       method: "POST",
@@ -330,6 +361,8 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
     setFeedback("Site visit recorded and lead/site summary updated.");
     setError("");
     setAnalysis(null);
+    setArrivalPhoto(null);
+    setArrivalPhotoCoords(null);
     setSiteAddress("");
     setSiteName("");
     setSelectedKnownStakeholderKeys([]);
@@ -452,23 +485,24 @@ export function SiteVisitFlowCard({ leads, leadSites }: SiteVisitFlowCardProps) 
       ) : null}
 
       <div className="field">
-        <label htmlFor="arrivalPhoto">Arrival photo</label>
-        <input
-          id="arrivalPhoto"
-          name="arrivalPhoto"
-          type="file"
-          accept="image/*"
-          required
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) {
-              void analyzePhoto(file);
-            } else {
-              setAnalysis(null);
-            }
+        <label>Arrival photo</label>
+        <GpsCamera
+          label="Take Site Visit Photo"
+          agentName={agentName}
+          employeeId={employeeId}
+          siteName={usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim() || undefined}
+          onCapture={(file, coords) => {
+            void handleArrivalPhotoCapture(file, coords);
           }}
+          disabled={busy || analysisBusy}
         />
-        <span className="hint">Use a GPS camera site photo so address, date, and coordinates can be extracted.</span>
+        {arrivalPhoto ? (
+          <span className="hint">
+            Photo ready: {arrivalPhoto.name} ({(arrivalPhoto.size / 1024).toFixed(0)} KB)
+          </span>
+        ) : (
+          <span className="hint">Use the in-app GPS camera so the photo carries address, date, and coordinates for extraction.</span>
+        )}
       </div>
 
       {analysisBusy ? <div className="note-box">Reading the GPS watermark from the uploaded site photo...</div> : null}

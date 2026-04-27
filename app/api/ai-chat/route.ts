@@ -54,19 +54,20 @@ export async function POST(request: Request) {
       { role: "user", text: userMessage },
     ];
 
-    const result = await callGeminiChat(fullHistory, ctx);
-
-    if (!result) {
+    try {
+      const result = await callGeminiChat(fullHistory, ctx);
       return jsonOk({
-        reply: "I'm sorry, the AI assistant is currently unavailable. Please check that the GEMINI_API_KEY is configured.",
+        reply: result.text,
+        actionBlock: result.actionBlock,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown Gemini error.";
+      console.error("SPD Assistant failed:", reason);
+      return jsonOk({
+        reply: `SPD Assistant is unavailable right now. ${reason}`,
         actionBlock: null,
       });
     }
-
-    return jsonOk({
-      reply: result.text,
-      actionBlock: result.actionBlock,
-    });
   } catch (error) {
     return jsonError(error);
   }

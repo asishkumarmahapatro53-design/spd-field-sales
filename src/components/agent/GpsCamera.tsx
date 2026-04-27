@@ -50,7 +50,7 @@ export function GpsCamera({ label = "Take Photo", onCapture, siteName, agentName
 
       // 2. Reverse geocode if we have coords (for address watermark)
       let siteAddress: string | undefined;
-      if (gpsCoords && !siteName) {
+      if (gpsCoords) {
         const geocoded = await reverseGeocode(gpsCoords.lat, gpsCoords.lng);
         siteAddress = geocoded ?? undefined;
       }

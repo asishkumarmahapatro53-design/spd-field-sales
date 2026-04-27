@@ -91,7 +91,12 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrder
         isOpen={activeSection === "site-visit"}
         onOpen={() => setActiveSection("site-visit")}
       >
-        <SiteVisitFlowCard leads={leads} leadSites={leadSites} />
+        <SiteVisitFlowCard
+          agentName={user.name}
+          employeeId={user.employeeId}
+          leads={leads}
+          leadSites={leadSites}
+        />
       </ActionAccordionSection>
 
       <ActionAccordionSection
@@ -222,7 +227,7 @@ function OdometerUploadCard({
 
     if (payload.reading?.status === "AWAITING_CONFIRMATION") {
       setPendingReading(payload.reading);
-      setMessage("OCR finished. Confirm the extracted value before it moves into today's log.");
+      setMessage(payload.reading.verificationNote || "OCR finished. Confirm the extracted value before it moves into today's log.");
       return;
     }
 
@@ -235,7 +240,8 @@ function OdometerUploadCard({
 
     setPendingReading(null);
     setMessage(
-      "AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.",
+      payload.reading?.verificationNote ||
+        "AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.",
     );
     startTransition(() => router.refresh());
   }
@@ -327,6 +333,7 @@ function OdometerUploadCard({
       {pendingReading ? (
         <div className="warning-box">
           Extracted value: <strong>{pendingReading.ocrValue ?? "Not found"}</strong>.
+          {pendingReading.verificationNote ? <p>{pendingReading.verificationNote}</p> : null}
           <div className="button-row mt-12">
             <button className="button" type="button" disabled={busy || isRefreshing} onClick={confirmReading}>
               {busy ? "Saving..." : "Yes, confirm"}
