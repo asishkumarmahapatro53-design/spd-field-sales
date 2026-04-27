@@ -789,7 +789,8 @@ textarea {
 .status-workday_open,
 .status-ready,
 .status-manager_view,
-.status-accounting_view {
+.status-accounting_view,
+.status-mix_design_view {
   background: rgba(216, 230, 255, 0.72);
   color: var(--brand);
 }

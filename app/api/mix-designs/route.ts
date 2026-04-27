@@ -39,8 +39,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
-    if (user.role === "SALES_AGENT") {
-      throw new ApiError(403, "Only Managers can create Mix Designs.");
+    if (!["MANAGER", "ACCOUNTING", "MIX_DESIGN"].includes(user.role)) {
+      throw new ApiError(403, "Only Managers, Accounting, or Mix Design users can create Mix Designs.");
     }
 
     const body = (await request.json()) as Partial<MixDesign>;

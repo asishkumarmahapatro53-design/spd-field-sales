@@ -20,5 +20,9 @@ export default async function DashboardPage() {
     redirect("/batcher");
   }
 
+  if (user.role === "MIX_DESIGN") {
+    redirect("/mix-design");
+  }
+
   redirect("/accounting");
 }

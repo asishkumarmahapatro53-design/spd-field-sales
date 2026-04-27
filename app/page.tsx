@@ -47,6 +47,11 @@ export default async function HomePage() {
               <strong className="metric-value">AC3001</strong>
               <span className="metric-note">Password: password123</span>
             </article>
+            <article className="metric-card">
+              <span className="metric-label">Mix Design demo</span>
+              <strong className="metric-value">MD5001</strong>
+              <span className="metric-note">Password: password123</span>
+            </article>
           </div>
         </section>
         <section className="panel">

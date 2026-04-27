@@ -14,6 +14,7 @@ type SwitchUser = {
 const STAFF_OPTIONS: Array<{ role: UserRole; label: string; path: string }> = [
   { role: "MANAGER", label: "Manager", path: "/manager" },
   { role: "ACCOUNTING", label: "Accounting", path: "/accounting" },
+  { role: "MIX_DESIGN", label: "Mix Design", path: "/mix-design" },
 ];
 
 export function DashboardSwitcher({ currentUser, users }: { currentUser: SwitchUser; users: SwitchUser[] }) {

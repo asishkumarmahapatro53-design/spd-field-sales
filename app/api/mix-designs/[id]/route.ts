@@ -8,8 +8,8 @@ import type { MixDesign } from "@/lib/types";
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireUser();
-    if (user.role === "SALES_AGENT") {
-      throw new ApiError(403, "Only Managers can update Mix Designs.");
+    if (!["MANAGER", "ACCOUNTING", "MIX_DESIGN"].includes(user.role)) {
+      throw new ApiError(403, "Only Managers, Accounting, or Mix Design users can update Mix Designs.");
     }
 
     const { id } = await params;
