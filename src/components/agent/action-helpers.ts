@@ -25,11 +25,21 @@ export async function parseApiError(response: Response) {
     return `Request failed (${response.status}).`;
   }
 
+  const normalized = text.trim();
+
+  if (normalized.startsWith("<!DOCTYPE") || normalized.startsWith("<html") || normalized.startsWith("<HTML")) {
+    if (/request could not be satisfied/i.test(normalized)) {
+      return `Upload failed before the app server could process the photo (${response.status}). Please retake the photo closer to the odometer and try again.`;
+    }
+
+    return `The server returned an HTML error page instead of an API response (${response.status}). Please try again.`;
+  }
+
   try {
     const payload = JSON.parse(text) as { error?: string };
     return payload.error ?? `Request failed (${response.status}).`;
   } catch {
-    return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+    return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
   }
 }
 

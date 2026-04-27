@@ -15,6 +15,9 @@ import type { AgentDashboardData, ApprovalRequest, Lead, LeadSite, OdometerReadi
 
 type ActionSectionId = "odometer" | "site-visit" | "instant-price" | "approval" | "sales-order" | "schedule" | "help";
 
+const ODOMETER_UPLOAD_TARGET_BYTES = 32 * 1024;
+const ODOMETER_UPLOAD_HARD_LIMIT_BYTES = 40 * 1024;
+
 interface AgentActionPanelProps {
   user: AgentDashboardData["user"];
   leads: Lead[];
@@ -198,6 +201,13 @@ function OdometerUploadCard({
       return;
     }
 
+    if (capturedFile.size > ODOMETER_UPLOAD_HARD_LIMIT_BYTES) {
+      setError(
+        `This photo is still ${(capturedFile.size / 1024).toFixed(0)} KB after compression. Retake it closer to the odometer so the upload stays under the mobile limit.`,
+      );
+      return;
+    }
+
     setBusy(true);
 
     // Build FormData — same contract the API already expects
@@ -312,6 +322,14 @@ function OdometerUploadCard({
           agentName={agentName}
           employeeId={employeeId}
           onCapture={handleCapture}
+          compression={{
+            maxDimension: 1280,
+            minDimension: 900,
+            targetMaxBytes: ODOMETER_UPLOAD_TARGET_BYTES,
+            initialQuality: 0.64,
+            minimumQuality: 0.3,
+            qualityStep: 0.07,
+          }}
           disabled={busy}
         />
         {capturedFile && (
