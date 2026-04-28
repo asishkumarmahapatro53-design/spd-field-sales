@@ -66,7 +66,7 @@ If you want to test with Firestore but keep uploads on the local machine, set:
 FIREBASE_USE_STORAGE="false"
 ```
 
-This Firebase adapter is designed for real workflow testing. It stores the app state in Firestore collections under `FIREBASE_APP_STATE_COLLECTION`. Do not change `FIREBASE_PROJECT_ID`, `FIREBASE_FIRESTORE_DATABASE_ID`, or `FIREBASE_APP_STATE_COLLECTION` after real users start entering data unless you are intentionally migrating the data.
+This Firebase adapter is designed for real workflow testing. New writes are stored in Firestore collections under `FIREBASE_APP_STATE_COLLECTION`. If older data exists in the legacy document `app_state/main`, the app reads it and copies it into the collection structure without deleting the legacy document. Do not change `FIREBASE_PROJECT_ID`, `FIREBASE_FIRESTORE_DATABASE_ID`, or `FIREBASE_APP_STATE_COLLECTION` after real users start entering data unless you are intentionally migrating the data.
 
 ## Render + Supabase free path
 

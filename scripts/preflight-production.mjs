@@ -124,6 +124,7 @@ async function checkFirebase(env, results) {
     const credential = getFirebaseCredential(env);
     const databaseId = env.FIREBASE_FIRESTORE_DATABASE_ID?.trim();
     const rootCollection = env.FIREBASE_APP_STATE_COLLECTION?.trim() || "app_state";
+    const legacyDocId = env.FIREBASE_APP_STATE_DOC?.trim() || "main";
 
     app = initializeApp(
       {
@@ -166,11 +167,21 @@ async function checkFirebase(env, results) {
       }),
     );
     const hasAppData = appDataResults.some((entry) => entry.hasAnyDocument);
+    const legacySnap = await firestore.collection(rootCollection).doc(legacyDocId).get();
+    const legacyData = legacySnap.exists ? legacySnap.data() || {} : {};
+    const legacyAppDataResults = APP_DATA_COLLECTIONS.map((collectionName) => {
+      const value = legacyData[collectionName];
+      return {
+        collectionName,
+        hasAnyDocument: Array.isArray(value) && value.length > 0,
+      };
+    });
+    const hasLegacyAppData = legacyAppDataResults.some((entry) => entry.hasAnyDocument);
     const allowEmpty = env.PREFLIGHT_ALLOW_EMPTY_FIREBASE?.trim().toLowerCase() === "true";
 
-    if (!hasAppData && !allowEmpty) {
+    if (!hasAppData && !hasLegacyAppData && !allowEmpty) {
       throw new Error(
-        `No existing app data was found at ${rootCollection}/collections. This usually means the Firebase project, database, or collection is wrong.`,
+        `No existing app data was found at ${rootCollection}/collections or legacy document ${rootCollection}/${legacyDocId}. This usually means the Firebase project, database, or collection is wrong.`,
       );
     }
 
@@ -178,7 +189,10 @@ async function checkFirebase(env, results) {
       credentialMode: credential.mode,
       databaseId: databaseId || "(default)",
       rootCollection,
+      legacyDocId,
       appDataResults,
+      legacyAppDataResults,
+      storageShape: hasAppData ? "collections" : hasLegacyAppData ? "legacy-document" : "empty-allowed",
     });
   } catch (error) {
     record(results, "fail", "firebase", sanitizeError(error));

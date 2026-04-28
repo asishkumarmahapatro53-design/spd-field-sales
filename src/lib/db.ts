@@ -665,6 +665,10 @@ function getFirebaseRootPath() {
   return process.env.FIREBASE_APP_STATE_COLLECTION?.trim() || "app_state";
 }
 
+function getFirebaseLegacyDocId() {
+  return process.env.FIREBASE_APP_STATE_DOC?.trim() || "main";
+}
+
 const COLLECTION_NAMES = [
   "users",
   "authSessions",
@@ -720,6 +724,31 @@ async function syncAllToFirebase(database: Database) {
   }
 }
 
+function hasExistingAppData(database: Partial<Database>) {
+  return COLLECTION_NAMES.some((collectionName) => {
+    const list = database[collectionName as keyof Database];
+    return Array.isArray(list) && list.length > 0;
+  });
+}
+
+async function readLegacyFirebaseDocument(): Promise<Database | null> {
+  const firestore = await getFirebaseFirestore();
+  const rootCollection = getFirebaseRootPath();
+  const legacyDocId = getFirebaseLegacyDocId();
+  const legacySnap = await firestore.collection(rootCollection).doc(legacyDocId).get();
+
+  if (!legacySnap.exists) {
+    return null;
+  }
+
+  const legacyDatabase = legacySnap.data() as Partial<Database> | undefined;
+  if (!legacyDatabase || !hasExistingAppData(legacyDatabase)) {
+    return null;
+  }
+
+  return normalizeDatabase(legacyDatabase as Database);
+}
+
 async function ensureFirebaseCollections(): Promise<Database> {
   const firestore = await getFirebaseFirestore();
   const rootCollection = getFirebaseRootPath();
@@ -737,6 +766,14 @@ async function ensureFirebaseCollections(): Promise<Database> {
   );
 
   if (isEmpty) {
+    const legacyDatabase = await readLegacyFirebaseDocument();
+
+    if (legacyDatabase) {
+      console.info("Migrating legacy Firebase app_state document into collection storage.");
+      await syncAllToFirebase(legacyDatabase);
+      return legacyDatabase;
+    }
+
     const seed = createSeedDatabase();
     await syncAllToFirebase(seed);
     return seed;

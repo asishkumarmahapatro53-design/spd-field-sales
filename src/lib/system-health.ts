@@ -96,6 +96,7 @@ function getFirebaseEnvSummary() {
     privateKeyLooksValid,
     databaseIdPresent: Boolean(process.env.FIREBASE_FIRESTORE_DATABASE_ID?.trim()),
     appStateCollection: process.env.FIREBASE_APP_STATE_COLLECTION?.trim() || "app_state",
+    legacyDocId: process.env.FIREBASE_APP_STATE_DOC?.trim() || "main",
   };
 }
 
@@ -146,26 +147,39 @@ async function checkFirebase(options: Required<Pick<SystemHealthOptions, "deep" 
       }),
     );
     const hasAppData = appDataResults.some((entry) => entry.hasAnyDocument);
+    const legacySnap = await firestore.collection(summary.appStateCollection).doc(summary.legacyDocId).get();
+    const legacyData = legacySnap.exists ? legacySnap.data() ?? {} : {};
+    const legacyAppDataResults = APP_DATA_COLLECTIONS.map((collectionName) => {
+      const value = legacyData[collectionName];
+      return {
+        collectionName,
+        hasAnyDocument: Array.isArray(value) && value.length > 0,
+      };
+    });
+    const hasLegacyAppData = legacyAppDataResults.some((entry) => entry.hasAnyDocument);
 
     if (!healthSnap.exists) {
       return makeCheck("firebase", "fail", "Firebase write succeeded but read-back failed.", summary);
     }
 
-    if (options.requireAppData && !hasAppData) {
+    if (options.requireAppData && !hasAppData && !hasLegacyAppData) {
       return makeCheck(
         "firebase",
         "fail",
-        "Firebase is reachable, but no existing app data was found in the configured app_state path. This can indicate the wrong project, database, or collection.",
+        "Firebase is reachable, but no existing app data was found in either collection storage or the legacy app_state document. This can indicate the wrong project, database, or collection.",
         {
           ...summary,
           appDataResults,
+          legacyAppDataResults,
         },
       );
     }
 
-    return makeCheck("firebase", hasAppData ? "pass" : "warn", "Firebase durable read/write/delete check passed.", {
+    return makeCheck("firebase", hasAppData || hasLegacyAppData ? "pass" : "warn", "Firebase durable read/write/delete check passed.", {
       ...summary,
       appDataResults,
+      legacyAppDataResults,
+      storageShape: hasAppData ? "collections" : hasLegacyAppData ? "legacy-document" : "empty-allowed",
     });
   } catch (error) {
     return makeCheck("firebase", "fail", `Firebase durable check failed: ${sanitizeError(error)}`, summary);
