@@ -707,11 +707,11 @@ async function syncAllToFirebase(database: Database) {
     for (const item of list) {
       if (item.id) {
         const ref = firestore.collection(rootCollection).doc("collections").collection(collectionName).doc(item.id);
-        batch.set(ref, item);
+        batch.set(ref, sanitizeFirestoreValue(item));
         opCount++;
 
         if (opCount >= 490) {
-          await batch.commit();
+          await commitFirebaseBatch(batch, `sync ${collectionName}/${item.id}`);
           batch = firestore.batch(); // start a fresh batch after every commit
           opCount = 0;
         }
@@ -720,8 +720,45 @@ async function syncAllToFirebase(database: Database) {
   }
 
   if (opCount > 0) {
-    await batch.commit();
+    await commitFirebaseBatch(batch, "sync final batch");
   }
+}
+
+async function commitFirebaseBatch(batch: FirebaseFirestore.WriteBatch, context: string) {
+  try {
+    await batch.commit();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${context}: ${message}`);
+  }
+}
+
+function sanitizeFirestoreValue<T>(value: T): T {
+  if (value === undefined) {
+    return undefined as T;
+  }
+
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => (entry === undefined ? null : sanitizeFirestoreValue(entry))) as T;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return value;
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined) {
+      sanitized[key] = sanitizeFirestoreValue(entry);
+    }
+  }
+
+  return sanitized as T;
 }
 
 function hasExistingAppData(database: Partial<Database>) {
@@ -867,10 +904,10 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
           const oldStr = oldMap.get(newItem.id);
 
           if (newStr !== oldStr) {
-            batch.set(refCol.doc(newItem.id), newItem);
+            batch.set(refCol.doc(newItem.id), sanitizeFirestoreValue(newItem));
             opCount++;
             if (opCount >= 490) {
-              await batch.commit();
+              await commitFirebaseBatch(batch, `update ${collectionName}/${newItem.id}`);
               batch = firestore.batch(); // fresh batch after commit
               opCount = 0;
             }
@@ -883,7 +920,7 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
             batch.delete(refCol.doc(oldId));
             opCount++;
             if (opCount >= 490) {
-              await batch.commit();
+              await commitFirebaseBatch(batch, `delete ${collectionName}/${oldId}`);
               batch = firestore.batch(); // fresh batch after commit
               opCount = 0;
             }
@@ -892,7 +929,7 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
       }
 
       if (opCount > 0) {
-        await batch.commit();
+        await commitFirebaseBatch(batch, "update final batch");
       }
 
       return result;
