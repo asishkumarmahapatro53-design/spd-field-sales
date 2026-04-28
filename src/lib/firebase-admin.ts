@@ -31,13 +31,32 @@ function normalizePrivateKey(value: string | undefined) {
     .trim();
 }
 
+function parseServiceAccountJson(raw: string, source: string) {
+  const parsed = JSON.parse(raw) as {
+    project_id?: string;
+    client_email?: string;
+    private_key?: string;
+  };
+
+  if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
+    throw new Error(`${source} is missing required Firebase service-account fields.`);
+  }
+
+  return {
+    projectId: parsed.project_id,
+    clientEmail: parsed.client_email,
+    privateKey: normalizePrivateKey(parsed.private_key),
+  } satisfies FirebaseServiceAccount;
+}
+
 export function hasFirebaseCredentialShape() {
   const jsonPath = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_PATH?.trim();
+  const base64Json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64?.trim();
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
 
-  return Boolean(jsonPath || (projectId && clientEmail && privateKey));
+  return Boolean(jsonPath || base64Json || (projectId && clientEmail && privateKey));
 }
 
 async function readServiceAccountFromFile() {
@@ -59,21 +78,20 @@ async function readServiceAccountFromFile() {
     throw error;
   }
 
-  const parsed = JSON.parse(raw) as {
-    project_id?: string;
-    client_email?: string;
-    private_key?: string;
-  };
+  return parseServiceAccountJson(raw, "The Firebase service account JSON file");
+}
 
-  if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
-    throw new Error("The Firebase service account JSON file is missing required fields.");
+function readServiceAccountFromBase64Env() {
+  const encoded = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64?.trim();
+
+  if (!encoded) {
+    return null;
   }
 
-  return {
-    projectId: parsed.project_id,
-    clientEmail: parsed.client_email,
-    privateKey: parsed.private_key,
-  } satisfies FirebaseServiceAccount;
+  const normalized = encoded.replace(/\s+/g, "");
+  const raw = Buffer.from(normalized, "base64").toString("utf-8");
+
+  return parseServiceAccountJson(raw, "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64");
 }
 
 function readServiceAccountFromEnv() {
@@ -95,7 +113,7 @@ function readServiceAccountFromEnv() {
 let firebaseInitPromise: Promise<ReturnType<typeof initializeApp> | null> | null = null;
 
 async function getServiceAccount() {
-  return (await readServiceAccountFromFile()) ?? readServiceAccountFromEnv();
+  return (await readServiceAccountFromFile()) ?? readServiceAccountFromBase64Env() ?? readServiceAccountFromEnv();
 }
 
 async function getFirebaseApp() {

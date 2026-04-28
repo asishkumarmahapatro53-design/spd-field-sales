@@ -74,11 +74,13 @@ function getExpectedOrigin(input?: string) {
 
 function getFirebaseEnvSummary() {
   const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_PATH?.trim() || "";
+  const serviceAccountBase64 = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64?.trim() || "";
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim() || "";
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim() || "";
   const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY || "";
   const privateKey = privateKeyRaw.replaceAll("\\n", "\n").trim();
   const usesJsonFile = Boolean(serviceAccountPath);
+  const usesBase64Credentials = Boolean(serviceAccountBase64);
   const usesInlineCredentials = Boolean(projectId || clientEmail || privateKeyRaw);
   const privateKeyLooksValid =
     !privateKeyRaw ||
@@ -89,6 +91,7 @@ function getFirebaseEnvSummary() {
   return {
     usesJsonFile,
     jsonFileExists: usesJsonFile ? existsSync(serviceAccountPath) : null,
+    usesBase64Credentials,
     usesInlineCredentials,
     projectIdPresent: Boolean(projectId),
     clientEmailPresent: Boolean(clientEmail),
@@ -107,11 +110,15 @@ async function checkFirebase(options: Required<Pick<SystemHealthOptions, "deep" 
     return makeCheck("firebase", "fail", "Firebase service-account JSON path is configured but the file is missing.", summary);
   }
 
-  if (!summary.usesJsonFile && (!summary.projectIdPresent || !summary.clientEmailPresent || !summary.privateKeyPresent)) {
+  if (
+    !summary.usesJsonFile &&
+    !summary.usesBase64Credentials &&
+    (!summary.projectIdPresent || !summary.clientEmailPresent || !summary.privateKeyPresent)
+  ) {
     return makeCheck("firebase", "fail", "Firebase credentials are incomplete.", summary);
   }
 
-  if (!summary.privateKeyLooksValid) {
+  if (!summary.usesJsonFile && !summary.usesBase64Credentials && !summary.privateKeyLooksValid) {
     return makeCheck("firebase", "fail", "Firebase private key format looks invalid. It should contain escaped newlines.", summary);
   }
 

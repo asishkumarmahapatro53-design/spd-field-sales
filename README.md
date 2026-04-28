@@ -48,7 +48,7 @@ FIREBASE_APP_STATE_COLLECTION="app_state"
 FIREBASE_APP_STATE_DOC="main"
 ```
 
-You can also use `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` instead of a JSON file, but the file path is easier on Windows.
+For hosted deployments where a JSON file path is not available, prefer `FIREBASE_SERVICE_ACCOUNT_JSON_BASE64`. Base64-encode the full Firebase service-account JSON file and paste that single-line value into the hosting environment. The app also supports `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`, but that split-key format is easier to break because private keys contain newline markers.
 
 When Firebase is configured:
 
@@ -87,6 +87,7 @@ SUPABASE_STORAGE_BUCKET="spd-uploads"
 FIREBASE_PROJECT_ID="your-firebase-project-id"
 FIREBASE_CLIENT_EMAIL="your-firebase-client-email"
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+FIREBASE_SERVICE_ACCOUNT_JSON_BASE64="base64-encoded-full-service-account-json"
 FIREBASE_FIRESTORE_DATABASE_ID="spddata"
 FIREBASE_USE_STORAGE="false"
 FIREBASE_APP_STATE_COLLECTION="app_state"

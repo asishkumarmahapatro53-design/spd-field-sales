@@ -73,6 +73,28 @@ function sanitizeError(error) {
     .slice(0, 320);
 }
 
+function normalizePrivateKey(value) {
+  return String(value || "")
+    .replaceAll("\\\\n", "\n")
+    .replaceAll("\\n", "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+function parseServiceAccountJson(raw, source) {
+  const parsed = JSON.parse(raw);
+  if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
+    throw new Error(`${source} is missing required Firebase service-account fields.`);
+  }
+
+  return {
+    projectId: parsed.project_id,
+    clientEmail: parsed.client_email,
+    privateKey: normalizePrivateKey(parsed.private_key),
+  };
+}
+
 function record(results, status, name, message, details = {}) {
   results.push({ status, name, message, details });
 }
@@ -84,22 +106,24 @@ function getFirebaseCredential(env) {
       throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON_PATH is configured but the file does not exist.");
     }
 
-    const parsed = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-    if (!parsed.project_id || !parsed.client_email || !parsed.private_key) {
-      throw new Error("Firebase service-account JSON is missing required fields.");
-    }
-
     return {
-      projectId: parsed.project_id,
-      clientEmail: parsed.client_email,
-      privateKey: parsed.private_key,
+      ...parseServiceAccountJson(fs.readFileSync(jsonPath, "utf8"), "Firebase service-account JSON file"),
       mode: "json-file",
+    };
+  }
+
+  const base64Json = env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64?.trim();
+  if (base64Json) {
+    const raw = Buffer.from(base64Json.replace(/\s+/g, ""), "base64").toString("utf-8");
+    return {
+      ...parseServiceAccountJson(raw, "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64"),
+      mode: "base64-json-env",
     };
   }
 
   const projectId = env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = env.FIREBASE_CLIENT_EMAIL?.trim();
-  const privateKey = env.FIREBASE_PRIVATE_KEY?.replaceAll("\\n", "\n").trim();
+  const privateKey = normalizePrivateKey(env.FIREBASE_PRIVATE_KEY);
 
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error("FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, or FIREBASE_PRIVATE_KEY is missing.");
