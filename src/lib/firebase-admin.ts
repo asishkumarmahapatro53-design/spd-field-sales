@@ -9,6 +9,37 @@ interface FirebaseServiceAccount {
   privateKey: string;
 }
 
+function normalizePrivateKey(value: string | undefined) {
+  let privateKey = value?.trim() || "";
+
+  if (
+    (privateKey.startsWith("\"") && privateKey.endsWith("\"")) ||
+    (privateKey.startsWith("'") && privateKey.endsWith("'"))
+  ) {
+    try {
+      privateKey = JSON.parse(privateKey) as string;
+    } catch {
+      privateKey = privateKey.slice(1, -1);
+    }
+  }
+
+  return privateKey
+    .replaceAll("\\\\n", "\n")
+    .replaceAll("\\n", "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+export function hasFirebaseCredentialShape() {
+  const jsonPath = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_PATH?.trim();
+  const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+  const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+
+  return Boolean(jsonPath || (projectId && clientEmail && privateKey));
+}
+
 async function readServiceAccountFromFile() {
   const jsonPath = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_PATH?.trim();
 
@@ -48,7 +79,7 @@ async function readServiceAccountFromFile() {
 function readServiceAccountFromEnv() {
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replaceAll("\\n", "\n");
+  const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
 
   if (!projectId || !clientEmail || !privateKey) {
     return null;
@@ -70,38 +101,43 @@ async function getServiceAccount() {
 async function getFirebaseApp() {
   if (!firebaseInitPromise) {
     firebaseInitPromise = (async () => {
-      try {
-        const existing = getApps()[0];
-        if (existing) {
-          return existing;
-        }
+      const existing = getApps()[0];
+      if (existing) {
+        return existing;
+      }
 
-        const serviceAccount = await getServiceAccount();
-        if (!serviceAccount) {
-          return null;
-        }
-
-        return initializeApp({
-          credential: cert({
-            projectId: serviceAccount.projectId,
-            clientEmail: serviceAccount.clientEmail,
-            privateKey: serviceAccount.privateKey,
-          }),
-          storageBucket: process.env.FIREBASE_STORAGE_BUCKET?.trim() || undefined,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`Firebase initialization failed: ${message}`);
+      const serviceAccount = await getServiceAccount();
+      if (!serviceAccount) {
         return null;
       }
+
+      return initializeApp({
+        credential: cert({
+          projectId: serviceAccount.projectId,
+          clientEmail: serviceAccount.clientEmail,
+          privateKey: serviceAccount.privateKey,
+        }),
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET?.trim() || undefined,
+      });
     })();
   }
 
-  return firebaseInitPromise;
+  try {
+    return await firebaseInitPromise;
+  } catch (error) {
+    firebaseInitPromise = null;
+    throw error;
+  }
 }
 
 export async function isFirebaseConfigured() {
-  return Boolean(await getFirebaseApp());
+  try {
+    return Boolean(await getFirebaseApp());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Firebase initialization failed: ${message}`);
+    return false;
+  }
 }
 
 export async function getFirebaseFirestore() {

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getApprovalItems, normalizePaymentTerms } from "@/lib/commercial";
-import { getFirebaseFirestore, isFirebaseConfigured } from "@/lib/firebase-admin";
+import { getFirebaseFirestore, hasFirebaseCredentialShape } from "@/lib/firebase-admin";
 import { hashPassword } from "@/lib/password";
 import type { Database, Lead, LeadSite, SiteVisit, StakeholderContact, User } from "@/lib/types";
 import { nowIso, toDateKey } from "@/lib/date";
@@ -783,7 +783,7 @@ async function ensureFirebaseCollections(): Promise<Database> {
 }
 
 export async function readDatabase(): Promise<Database> {
-  if (await isFirebaseConfigured()) {
+  if (hasFirebaseCredentialShape()) {
     try {
       return await ensureFirebaseCollections();
     } catch (error) {
@@ -805,7 +805,7 @@ export async function readDatabase(): Promise<Database> {
 }
 
 export async function writeDatabase(database: Database) {
-  if (await isFirebaseConfigured()) {
+  if (hasFirebaseCredentialShape()) {
     try {
       // Legacy support, updateDatabase should be used for granular diffs
       await syncAllToFirebase(database);
@@ -828,7 +828,7 @@ export async function writeDatabase(database: Database) {
 }
 
 export async function updateDatabase<T>(updater: (database: Database) => Promise<T> | T): Promise<T> {
-  if (await isFirebaseConfigured()) {
+  if (hasFirebaseCredentialShape()) {
     try {
       // Instead of locking a giant transaction, we read the collections concurrently, run the updater, and then apply isolated diffs.
       // This allows 100 concurrent users to write without Firestore locking errors.
