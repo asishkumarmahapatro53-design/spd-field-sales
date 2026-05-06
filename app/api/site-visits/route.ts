@@ -94,6 +94,7 @@ function readCommonSiteVisitFields(source: { get: (key: string) => unknown }) {
     photoWatermarkAddress: readOptionalString(source.get("photoWatermarkAddress")),
     photoCapturedAt: readOptionalString(source.get("photoCapturedAt")) || null,
     remarksText: readOptionalString(source.get("remarksText")),
+    remarksTranscriptText: readOptionalString(source.get("remarksTranscriptText")),
   };
 }
 

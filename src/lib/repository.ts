@@ -872,6 +872,7 @@ export async function createSiteVisit(
     photoWatermarkAddress: string;
     photoCapturedAt: string | null;
     remarksText: string;
+    remarksTranscriptText?: string;
     remarksVoiceNoteFile?: File | null;
     remarksVoiceNoteObject?: UploadedS3ObjectInput | null;
   },
@@ -890,7 +891,7 @@ export async function createSiteVisit(
         })
       : null;
   const remarksVoiceNoteUpload = await prepareSiteVisitVoiceNoteUpload(input);
-  const transcript = remarksVoiceNoteUpload
+  const transcript = remarksVoiceNoteUpload && !input.remarksTranscriptText?.trim()
     ? await ocrService.transcribeVoiceNote({
         fileName: remarksVoiceNoteUpload.originalFileName || "voice-note",
         localAbsolutePath: remarksVoiceNoteUpload.localAbsolutePath,
@@ -899,7 +900,12 @@ export async function createSiteVisit(
         mimeType: remarksVoiceNoteUpload.mimeType,
       })
     : null;
-  const remarksText = [input.remarksText.trim(), transcript?.text?.trim() || ""].filter(Boolean).join("\n\n");
+  const typedRemarksText = input.remarksText.trim();
+  const transcriptText = input.remarksTranscriptText?.trim() || transcript?.text?.trim() || "";
+  const remarksText =
+    transcriptText && typedRemarksText.toLowerCase().includes(transcriptText.toLowerCase())
+      ? typedRemarksText
+      : [typedRemarksText, transcriptText].filter(Boolean).join("\n\n");
   const resolvedSiteAddress = `${input.siteAddress || metadataFallback?.siteAddress || input.photoWatermarkAddress || ""}`.trim();
   const detectedLatLng = input.detectedLatLng ?? metadataFallback?.latLng ?? null;
   const detectedAddress = `${input.photoWatermarkAddress || metadataFallback?.siteAddress || resolvedSiteAddress}`.trim();
@@ -1058,6 +1064,117 @@ export async function createSiteVisit(
 
     database.siteVisits.unshift(visit);
     logAudit(database, user, "SiteVisit", visit.id, "CREATE", `Recorded site visit for ${site.siteName}.`);
+    return visit;
+  });
+}
+
+export async function updateSiteVisit(
+  user: User,
+  visitId: string,
+  input: {
+    stageOfWork?: string;
+    futureScope?: string;
+    concreteGrade?: string;
+    quantityCum?: number;
+    leadStage?: LeadStage;
+    nextFollowUpAt?: string;
+    expectedSupplyWindow?: ExpectedSupplyWindow | null;
+    remarksText?: string;
+  },
+) {
+  assertRole(user, ["SALES_AGENT"]);
+
+  return updateDatabase((database) => {
+    const visit = database.siteVisits.find((entry) => entry.id === visitId);
+
+    if (!visit) {
+      throw new Error("Site visit not found.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === visit.sessionId);
+    if (!session || session.userId !== user.id) {
+      throw new Error("You can only edit your own site visit reports.");
+    }
+
+    if (typeof input.stageOfWork === "string") {
+      const value = input.stageOfWork.trim();
+      if (!value) {
+        throw new Error("Stage of work cannot be empty.");
+      }
+      visit.stageOfWork = value;
+    }
+
+    if (typeof input.futureScope === "string") {
+      const value = input.futureScope.trim();
+      if (!value) {
+        throw new Error("Future scope cannot be empty.");
+      }
+      visit.futureScope = value;
+    }
+
+    if (typeof input.concreteGrade === "string") {
+      const value = input.concreteGrade.trim().toUpperCase();
+      if (!value) {
+        throw new Error("Concrete grade cannot be empty.");
+      }
+      visit.concreteGrade = value;
+    }
+
+    if (typeof input.quantityCum === "number") {
+      if (!Number.isFinite(input.quantityCum) || input.quantityCum <= 0) {
+        throw new Error("Quantity must be greater than zero.");
+      }
+      visit.quantityCum = input.quantityCum;
+    }
+
+    if (input.leadStage) {
+      visit.leadStage = input.leadStage;
+    }
+
+    if (typeof input.nextFollowUpAt === "string") {
+      const date = new Date(input.nextFollowUpAt);
+      if (Number.isNaN(date.getTime())) {
+        throw new Error("Invalid follow-up date.");
+      }
+      visit.nextFollowUpAt = date.toISOString();
+    }
+
+    if (input.expectedSupplyWindow !== undefined) {
+      visit.expectedSupplyWindow = input.expectedSupplyWindow;
+    }
+
+    if (typeof input.remarksText === "string") {
+      visit.remarksText = input.remarksText.trim();
+    }
+
+    const now = nowIso();
+    const site = visit.siteId ? database.leadSites.find((entry) => entry.id === visit.siteId && entry.leadId === visit.leadId) : null;
+    if (site) {
+      site.currentConcreteGrade = visit.concreteGrade;
+      site.currentQuantityCum = visit.quantityCum;
+      site.futureScope = visit.futureScope;
+      site.expectedSupplyWindow = visit.expectedSupplyWindow ?? null;
+      if (compareIsoAsc(site.lastVisitedAt, visit.visitedAt) <= 0) {
+        site.lastVisitedAt = visit.visitedAt;
+      }
+      site.updatedAt = now;
+    }
+
+    const lead = database.leads.find((entry) => entry.id === visit.leadId);
+    if (lead) {
+      lead.currentConcreteGrade = visit.concreteGrade;
+      lead.currentQuantityCum = visit.quantityCum;
+      lead.futureScope = visit.futureScope;
+      lead.stage = visit.leadStage;
+      lead.nextFollowUpAt = visit.nextFollowUpAt;
+      lead.lastVisitedAt = visit.visitedAt;
+      if (site) {
+        lead.siteName = site.siteName;
+        lead.siteAddress = site.siteAddress;
+      }
+    }
+
+    logAudit(database, user, "SiteVisit", visit.id, "UPDATE", `Updated site visit report for ${visit.siteName}.`);
     return visit;
   });
 }

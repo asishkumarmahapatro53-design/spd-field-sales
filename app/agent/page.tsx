@@ -7,6 +7,7 @@ import { AgentReimbursementClaims } from "@/components/agent/AgentReimbursementC
 import { AiAssistant } from "@/components/agent/AiAssistant";
 import { ReadingLogList } from "@/components/agent/ReadingLogList";
 import { ReimbursementSummaryList } from "@/components/agent/ReimbursementSummaryList";
+import { SiteVisitLogList } from "@/components/agent/SiteVisitLogList";
 import { requireUser } from "@/lib/auth";
 import { toIndiaTimeLabel } from "@/lib/date";
 import { getAgentDashboardData } from "@/lib/repository";
@@ -78,6 +79,16 @@ export default async function AgentPage() {
             </div>
 
             <ReadingLogList readings={data.readings} />
+
+            <details className="history-toggle">
+              <summary>
+                <span>Site Visit Logs ({data.siteVisits.length})</span>
+                <span className="history-toggle-copy">Show submitted reports</span>
+              </summary>
+              <div className="history-panel">
+                <SiteVisitLogList siteVisits={data.siteVisits} />
+              </div>
+            </details>
 
             <details className="history-toggle">
               <summary>

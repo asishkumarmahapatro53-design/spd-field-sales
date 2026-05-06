@@ -30,6 +30,12 @@ interface SiteVisitAnalysis {
   note: string;
 }
 
+interface VoiceNoteTranscript {
+  text: string | null;
+  confidence: number;
+  note: string;
+}
+
 const DEFAULT_STAKEHOLDER_ROLE: StakeholderRole = "SITE_SUPERVISOR";
 
 function createStakeholderDraft(): StakeholderDraft {
@@ -43,6 +49,38 @@ function createStakeholderDraft(): StakeholderDraft {
 
 function stakeholderKey(entry: StakeholderContact) {
   return `${entry.role ?? entry.label}:${entry.name}:${entry.phone}`;
+}
+
+function isFoundNoOneStakeholder(entry: StakeholderContact) {
+  const role = `${entry.role ?? ""}`.toUpperCase();
+  const name = entry.name.trim().toLowerCase();
+  return role === "FOUND_NO_ONE" || name === "found no one";
+}
+
+function normalizeTextForMatch(value: string) {
+  return value.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function hasConversationIntent(value: string) {
+  return /\b(talk(?:ed|ing)?|spoke|speak|met|meeting|discuss(?:ed|ion)?)\b/i.test(value);
+}
+
+function getAutoSelectedStakeholderKeysFromRemarks(remarks: string, stakeholders: StakeholderContact[]) {
+  if (!hasConversationIntent(remarks)) {
+    return [];
+  }
+
+  const normalizedRemarks = normalizeTextForMatch(remarks);
+  if (!normalizedRemarks) {
+    return [];
+  }
+
+  return stakeholders
+    .filter((entry) => {
+      const normalizedName = normalizeTextForMatch(entry.name || "");
+      return normalizedName.length >= 3 && normalizedRemarks.includes(normalizedName);
+    })
+    .map((entry) => stakeholderKey(entry));
 }
 
 function getVerificationMessage(status: SiteLocationVerificationStatus | null, distanceMeters: number | null) {
@@ -114,6 +152,13 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
   const [arrivalPhoto, setArrivalPhoto] = useState<File | null>(null);
   const [arrivalPhotoUpload, setArrivalPhotoUpload] = useState<PresignedUploadPayload | null>(null);
   const [arrivalPhotoCoords, setArrivalPhotoCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [voiceNoteUpload, setVoiceNoteUpload] = useState<PresignedUploadPayload | null>(null);
+  const [voiceTranscript, setVoiceTranscript] = useState<VoiceNoteTranscript | null>(null);
+  const [voiceTranscriptBusy, setVoiceTranscriptBusy] = useState(false);
+  const [voiceTranscriptError, setVoiceTranscriptError] = useState("");
+  const [remarksText, setRemarksText] = useState("");
+  const [remarksTranscriptText, setRemarksTranscriptText] = useState("");
+  const [stakeholderHint, setStakeholderHint] = useState("");
   const [leadStage, setLeadStage] = useState<LeadStage>("TALKS");
   const [leadStageEdited, setLeadStageEdited] = useState(false);
   const [nextFollowUpAt, setNextFollowUpAt] = useState(toDateTimeLocalValue(suggestNextFollowUp({ expectedSupplyWindow: "WITHIN_15_DAYS" })));
@@ -122,14 +167,22 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
   const selectedLead = useMemo(() => leads.find((entry) => entry.id === leadId) ?? null, [leadId, leads]);
   const sitesForLead = useMemo(() => leadSites.filter((entry) => entry.leadId === leadId), [leadId, leadSites]);
   const selectedSite = useMemo(() => sitesForLead.find((entry) => entry.id === siteId) ?? null, [siteId, sitesForLead]);
+  const selectableKnownStakeholders = useMemo(
+    () => (selectedSite?.stakeholders ?? []).filter((entry) => !isFoundNoOneStakeholder(entry)),
+    [selectedSite],
+  );
   const usingExistingSite = visitMode === "EXISTING_LEAD" && siteMode === "EXISTING_SITE" && !!selectedSite;
   const selectedKnownStakeholders = useMemo(
-    () => (selectedSite?.stakeholders ?? []).filter((entry) => selectedKnownStakeholderKeys.includes(stakeholderKey(entry))),
-    [selectedKnownStakeholderKeys, selectedSite],
+    () => selectableKnownStakeholders.filter((entry) => selectedKnownStakeholderKeys.includes(stakeholderKey(entry))),
+    [selectableKnownStakeholders, selectedKnownStakeholderKeys],
   );
   const suggestedStakeholders = useMemo(
     () => toStakeholderPayload(newStakeholders, selectedKnownStakeholders, foundNoOne),
     [foundNoOne, newStakeholders, selectedKnownStakeholders],
+  );
+  const combinedRemarks = useMemo(
+    () => [remarksText.trim(), remarksTranscriptText.trim()].filter(Boolean).join("\n"),
+    [remarksText, remarksTranscriptText],
   );
   const suggestedLeadStage = useMemo(
     () =>
@@ -205,13 +258,41 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     setArrivalPhoto(null);
     setArrivalPhotoUpload(null);
     setArrivalPhotoCoords(null);
+    setVoiceNoteUpload(null);
+    setVoiceTranscript(null);
+    setVoiceTranscriptBusy(false);
+    setVoiceTranscriptError("");
+    setRemarksText("");
+    setRemarksTranscriptText("");
     setSiteAddressEdited(false);
     setSiteAddress(usingExistingSite ? selectedSite?.siteAddress ?? "" : "");
     setSiteName(usingExistingSite ? selectedSite?.siteName ?? "" : "");
     setSelectedKnownStakeholderKeys([]);
+    setStakeholderHint("");
     setFoundNoOne(false);
     setNewStakeholders(usingExistingSite ? [] : [createStakeholderDraft()]);
   }, [leadId, selectedSite?.id, usingExistingSite]);
+
+  useEffect(() => {
+    if (!usingExistingSite || foundNoOne || !combinedRemarks.trim()) {
+      return;
+    }
+
+    const autoKeys = getAutoSelectedStakeholderKeysFromRemarks(combinedRemarks, selectableKnownStakeholders);
+    if (!autoKeys.length) {
+      return;
+    }
+
+    setSelectedKnownStakeholderKeys((current) => {
+      const merged = Array.from(new Set([...current, ...autoKeys]));
+      if (merged.length !== current.length) {
+        setStakeholderHint("Auto-selected stakeholder(s) mentioned in remarks/transcript.");
+        return merged;
+      }
+
+      return current;
+    });
+  }, [combinedRemarks, foundNoOne, selectableKnownStakeholders, usingExistingSite]);
 
   useEffect(() => {
     if (!leadStageEdited) {
@@ -298,6 +379,55 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     );
   }
 
+  async function transcribeVoiceNote(upload: PresignedUploadPayload, file: File) {
+    setVoiceTranscriptBusy(true);
+    setVoiceTranscriptError("");
+
+    const response = await fetch("/api/site-visit-transcript", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        s3Key: upload.key,
+        voiceName: upload.originalFileName || file.name,
+        mimeType: file.type || "audio/webm",
+      }),
+    });
+
+    if (!response.ok) {
+      setVoiceTranscript(null);
+      setVoiceTranscriptError(await parseApiError(response));
+      setVoiceTranscriptBusy(false);
+      return;
+    }
+
+    const payload = (await response.json()) as { transcript?: VoiceNoteTranscript };
+    const transcript = payload.transcript ?? null;
+    setVoiceTranscript(transcript);
+    setRemarksTranscriptText(transcript?.text?.trim() || "");
+    setVoiceTranscriptBusy(false);
+  }
+
+  async function handleVoiceNoteChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setVoiceNoteUpload(null);
+    setVoiceTranscript(null);
+    setVoiceTranscriptError("");
+    setRemarksTranscriptText("");
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const upload = await uploadDirectFile(file, "site-visit-voice");
+      setVoiceNoteUpload(upload);
+      await transcribeVoiceNote(upload, file);
+    } catch (voiceError) {
+      setVoiceTranscriptError(voiceError instanceof Error ? voiceError.message : "Voice note upload failed.");
+      setVoiceTranscriptBusy(false);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -343,9 +473,10 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       const remarksVoiceNote = formData.get("remarksVoiceNote");
       const directArrivalUpload = arrivalPhotoUpload ?? (await uploadDirectFile(arrivalPhoto, "site-visit"));
       const directVoiceUpload =
-        remarksVoiceNote instanceof File && remarksVoiceNote.size > 0
+        voiceNoteUpload ??
+        (remarksVoiceNote instanceof File && remarksVoiceNote.size > 0
           ? await uploadDirectFile(remarksVoiceNote, "site-visit-voice")
-          : null;
+          : null);
       const location = arrivalPhotoCoords
         ? { lat: String(arrivalPhotoCoords.lat), lng: String(arrivalPhotoCoords.lng) }
         : await getLocationPayload();
@@ -376,7 +507,8 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           quantityCum: formData.get("quantityCum"),
           stageOfWork: formData.get("stageOfWork"),
           futureScope: formData.get("futureScope"),
-          remarksText: formData.get("remarksText"),
+          remarksText,
+          remarksTranscriptText,
           currentSupplier,
           expectedSupplyWindow,
           leadStage,
@@ -401,9 +533,15 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       setArrivalPhoto(null);
       setArrivalPhotoUpload(null);
       setArrivalPhotoCoords(null);
+      setVoiceNoteUpload(null);
+      setVoiceTranscript(null);
+      setVoiceTranscriptError("");
+      setRemarksText("");
+      setRemarksTranscriptText("");
       setSiteAddress("");
       setSiteName("");
       setSelectedKnownStakeholderKeys([]);
+      setStakeholderHint("");
       setFoundNoOne(false);
       setNewStakeholders([createStakeholderDraft()]);
       setSiteAddressEdited(false);
@@ -584,33 +722,70 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           </div>
         </div>
 
-        {usingExistingSite && selectedSite?.stakeholders.length ? (
-          <div className="chip-grid">
-            {selectedSite.stakeholders.map((stakeholder) => {
-              const key = stakeholderKey(stakeholder);
-              const checked = selectedKnownStakeholderKeys.includes(key);
+        {usingExistingSite && selectableKnownStakeholders.length ? (
+          selectableKnownStakeholders.length > 1 ? (
+            <details className="history-toggle">
+              <summary>
+                <span>Choose stakeholder ({selectableKnownStakeholders.length})</span>
+                <span className="history-toggle-copy">{selectedKnownStakeholderKeys.length} selected</span>
+              </summary>
+              <div className="history-panel">
+                <div className="chip-grid">
+                  {selectableKnownStakeholders.map((stakeholder) => {
+                    const key = stakeholderKey(stakeholder);
+                    const checked = selectedKnownStakeholderKeys.includes(key);
 
-              return (
-                <label key={key} className={checked ? "selection-chip is-selected" : "selection-chip"}>
-                  <input
-                    checked={checked}
-                    disabled={foundNoOne}
-                    type="checkbox"
-                    onChange={(event) =>
-                      setSelectedKnownStakeholderKeys((current) =>
-                        event.target.checked ? [...current, key] : current.filter((entry) => entry !== key),
-                      )
-                    }
-                  />
-                  <span>
-                    <strong>{stakeholder.name || stakeholder.label}</strong>
-                    <small>{stakeholder.phone || stakeholder.label}</small>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
+                    return (
+                      <label key={key} className={checked ? "selection-chip is-selected" : "selection-chip"}>
+                        <input
+                          checked={checked}
+                          disabled={foundNoOne}
+                          type="checkbox"
+                          onChange={(event) =>
+                            setSelectedKnownStakeholderKeys((current) =>
+                              event.target.checked ? [...current, key] : current.filter((entry) => entry !== key),
+                            )
+                          }
+                        />
+                        <span>
+                          <strong>{stakeholder.name || stakeholder.label}</strong>
+                          <small>{stakeholder.phone || stakeholder.label}</small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </details>
+          ) : (
+            <div className="chip-grid">
+              {selectableKnownStakeholders.map((stakeholder) => {
+                const key = stakeholderKey(stakeholder);
+                const checked = selectedKnownStakeholderKeys.includes(key);
+
+                return (
+                  <label key={key} className={checked ? "selection-chip is-selected" : "selection-chip"}>
+                    <input
+                      checked={checked}
+                      disabled={foundNoOne}
+                      type="checkbox"
+                      onChange={(event) =>
+                        setSelectedKnownStakeholderKeys((current) =>
+                          event.target.checked ? [...current, key] : current.filter((entry) => entry !== key),
+                        )
+                      }
+                    />
+                    <span>
+                      <strong>{stakeholder.name || stakeholder.label}</strong>
+                      <small>{stakeholder.phone || stakeholder.label}</small>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )
         ) : null}
+        {stakeholderHint ? <div className="note-box">{stakeholderHint}</div> : null}
 
         <label className="choice-card">
           <input
@@ -800,14 +975,38 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
 
       <div className="field">
         <label htmlFor="remarksText">Remarks</label>
-        <textarea id="remarksText" name="remarksText" placeholder="Type remarks here or attach a voice note below." />
+        <textarea
+          id="remarksText"
+          name="remarksText"
+          value={remarksText}
+          onChange={(event) => setRemarksText(event.target.value)}
+          placeholder="Type remarks here or attach a voice note below."
+        />
       </div>
 
       <div className="field">
         <label htmlFor="remarksVoiceNote">Voice note (optional)</label>
-        <input id="remarksVoiceNote" name="remarksVoiceNote" type="file" accept="audio/*" />
-        <span className="hint">If a voice note is attached, Gemini will try to transcribe it into English after submit.</span>
+        <input id="remarksVoiceNote" name="remarksVoiceNote" type="file" accept="audio/*" onChange={handleVoiceNoteChange} />
+        <span className="hint">Voice note is transcribed before submit so you can edit transcript text.</span>
       </div>
+
+      {voiceTranscriptBusy ? <div className="note-box">Transcribing voice note...</div> : null}
+      {voiceTranscriptError ? <div className="error-box">{voiceTranscriptError}</div> : null}
+
+      {voiceTranscript ? (
+        <div className="field">
+          <label htmlFor="remarksTranscriptText">Transcript (editable)</label>
+          <textarea
+            id="remarksTranscriptText"
+            value={remarksTranscriptText}
+            onChange={(event) => setRemarksTranscriptText(event.target.value)}
+            placeholder="Transcript text will appear here."
+          />
+          <span className="hint">
+            Confidence {(voiceTranscript.confidence * 100).toFixed(0)}%. {voiceTranscript.note}
+          </span>
+        </div>
+      ) : null}
 
       <div className="note-box">Suggested lead score for this visit: {suggestedScore}/10</div>
 
