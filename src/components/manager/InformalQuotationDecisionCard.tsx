@@ -51,11 +51,13 @@ function QuotationDocument({
 
       <div className="quotation-document-grid">
         <DocumentField label="Lead / Customer" value={quotation.customerName} />
+        <DocumentField label="Billing Address" value={quotation.billingAddress} />
         <DocumentField label="Site" value={quotation.siteName} />
         <DocumentField label="Site Address" value={quotation.siteAddress} />
         <DocumentField label="Stakeholder" value={`${quotation.stakeholderName} (${quotation.stakeholderLabel})`} />
         <DocumentField label="Stakeholder Mobile" value={quotation.stakeholderPhone || "Not provided"} />
         <DocumentField label="Stakeholder Email" value={quotation.stakeholderEmail} />
+        <DocumentField label="WhatsApp Number" value={quotation.whatsappNumber} />
         <DocumentField label="Price Type" value={`${formatPriceType(quotation.priceType)}${quotation.priceType === "GST_INCLUSIVE" ? " - price includes GST" : ""}`} />
         <DocumentField label="Payment Type" value={formatPaymentType(quotation)} />
         <DocumentField label="One-Way Distance" value={`${quotation.oneWayDistanceKm} km`} />
@@ -91,6 +93,13 @@ function QuotationDocument({
         Status: <strong>{quotation.status}</strong>
         {quotation.decisionNote ? ` | Manager note: ${quotation.decisionNote}` : ""}
       </p>
+      <p>
+        Delivery: <strong>PDF {quotation.pdfStatus}</strong> | <strong>Email {quotation.emailStatus}</strong> |{" "}
+        <strong>WhatsApp {quotation.whatsappStatus}</strong>
+      </p>
+      {quotation.quotationPdfUrl ? <p>PDF stored at: {quotation.quotationPdfUrl}</p> : null}
+      {quotation.emailError ? <p>Email error: {quotation.emailError}</p> : null}
+      {quotation.whatsappError ? <p>WhatsApp note: {quotation.whatsappError}</p> : null}
     </article>
   );
 }
@@ -172,7 +181,7 @@ export function InformalQuotationDecisionCard({
                   disabled={busyId === quotation.id || isRefreshing}
                   onClick={() => void decide(quotation.id, "APPROVED")}
                 >
-                  {busyId === quotation.id ? "Saving..." : "Approve informal quotation"}
+                  {busyId === quotation.id ? "Saving..." : "Approve and send quotation"}
                 </button>
                 <button
                   className="button-danger"

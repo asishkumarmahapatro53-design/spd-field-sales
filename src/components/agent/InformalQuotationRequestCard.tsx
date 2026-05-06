@@ -92,6 +92,10 @@ export function InformalQuotationRequestCard({
   const [siteId, setSiteId] = useState("");
   const [stakeholderKey, setStakeholderKey] = useState("");
   const [stakeholderEmail, setStakeholderEmail] = useState("");
+  const [billingAddressMode, setBillingAddressMode] = useState<"SITE" | "CUSTOM">("SITE");
+  const [billingAddress, setBillingAddress] = useState("");
+  const [whatsappMode, setWhatsappMode] = useState<"STAKEHOLDER" | "CUSTOM">("STAKEHOLDER");
+  const [whatsappNumber, setWhatsappNumber] = useState("");
   const [priceType, setPriceType] = useState<InformalQuotationPriceType>("GST_INCLUSIVE");
   const [paymentType, setPaymentType] = useState<InformalQuotationPaymentType>("ADVANCE");
   const [creditDays, setCreditDays] = useState("");
@@ -129,6 +133,18 @@ export function InformalQuotationRequestCard({
     }
   }, [priceType]);
 
+  useEffect(() => {
+    if (billingAddressMode === "SITE") {
+      setBillingAddress(selectedSite?.siteAddress ?? "");
+    }
+  }, [billingAddressMode, selectedSite]);
+
+  useEffect(() => {
+    if (whatsappMode === "STAKEHOLDER") {
+      setWhatsappNumber(selectedStakeholder?.phone ?? "");
+    }
+  }, [selectedStakeholder, whatsappMode]);
+
   function updateItem(index: number, patch: Partial<QuotationItemDraft>) {
     setItems((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   }
@@ -153,6 +169,8 @@ export function InformalQuotationRequestCard({
       stakeholderName: selectedStakeholder.name,
       stakeholderPhone: selectedStakeholder.phone,
       stakeholderEmail,
+      billingAddress,
+      whatsappNumber,
       priceType,
       paymentType,
       creditDays: paymentType === "CREDIT" ? Number(creditDays) : null,
@@ -183,6 +201,10 @@ export function InformalQuotationRequestCard({
     setBusy(false);
     setFeedback("Informal quotation request submitted for manager approval.");
     setStakeholderEmail("");
+    setBillingAddressMode("SITE");
+    setBillingAddress(selectedSite?.siteAddress ?? "");
+    setWhatsappMode("STAKEHOLDER");
+    setWhatsappNumber(selectedStakeholder?.phone ?? "");
     setCreditDays("");
     setPaymentType("ADVANCE");
     setItems([createQuotationItem()]);
@@ -262,6 +284,55 @@ export function InformalQuotationRequestCard({
               required
             />
           </div>
+          <div className="field">
+            <label htmlFor="informalBillingMode">Billing address</label>
+            <select
+              id="informalBillingMode"
+              value={billingAddressMode}
+              onChange={(event) => setBillingAddressMode(event.target.value as "SITE" | "CUSTOM")}
+            >
+              <option value="SITE">Same as site address</option>
+              <option value="CUSTOM">Enter another billing address</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="informalWhatsappMode">WhatsApp number</label>
+            <select
+              id="informalWhatsappMode"
+              value={whatsappMode}
+              onChange={(event) => setWhatsappMode(event.target.value as "STAKEHOLDER" | "CUSTOM")}
+            >
+              <option value="STAKEHOLDER">Same as stakeholder mobile</option>
+              <option value="CUSTOM">Enter another WhatsApp number</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="two-grid">
+          <div className="field">
+            <label htmlFor="informalBillingAddress">Billing address for quotation</label>
+            <textarea
+              id="informalBillingAddress"
+              value={billingAddress}
+              onChange={(event) => setBillingAddress(event.target.value)}
+              disabled={billingAddressMode === "SITE"}
+              required
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="informalWhatsappNumber">Client WhatsApp number</label>
+            <input
+              id="informalWhatsappNumber"
+              value={whatsappNumber}
+              onChange={(event) => setWhatsappNumber(event.target.value)}
+              disabled={whatsappMode === "STAKEHOLDER"}
+              placeholder="+919876543210"
+              required
+            />
+          </div>
+        </div>
+
+        <div className="three-grid">
           <div className="field">
             <label htmlFor="informalPriceType">Price type</label>
             <select
@@ -438,6 +509,9 @@ export function InformalQuotationRequestCard({
                 <span>{quotation.stakeholderName}</span>
                 <span>{formatPriceType(quotation.priceType)}</span>
                 <span>{formatPaymentType(quotation.paymentType, quotation.creditDays)}</span>
+                <span>PDF {quotation.pdfStatus.toLowerCase().replaceAll("_", " ")}</span>
+                <span>Email {quotation.emailStatus.toLowerCase()}</span>
+                <span>WhatsApp {quotation.whatsappStatus.toLowerCase().replaceAll("_", " ")}</span>
                 <span>{toIndiaTimeLabel(quotation.createdAt)}</span>
               </div>
               <div className="note-box">View-only request. Download and forwarding stay locked until manager approval and final quotation format are configured.</div>

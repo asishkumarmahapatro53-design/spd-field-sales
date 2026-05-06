@@ -14,6 +14,9 @@ export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
 export type InformalQuotationStatus = "PENDING" | "APPROVED" | "REJECTED";
 export type InformalQuotationPriceType = "GST_INCLUSIVE" | "NON_GST";
 export type InformalQuotationPaymentType = "ADVANCE" | "CREDIT";
+export type InformalQuotationPdfStatus = "NOT_GENERATED" | "GENERATED" | "FAILED";
+export type InformalQuotationEmailStatus = "NOT_SENT" | "SENT" | "FAILED";
+export type InformalQuotationWhatsappStatus = "NOT_SENT" | "PENDING_CONFIGURATION" | "SENT" | "FAILED";
 export type TaskStatus = "OPEN" | "DONE";
 export type HelpRequestStatus = "OPEN" | "RESOLVED";
 export type FleetVehicleStatus = "ACTIVE" | "IDLE" | "SERVICE" | "OFF_ROUTE";
@@ -58,6 +61,7 @@ export interface User {
   role: UserRole;
   status: UserStatus;
   homePlantId: string | null;
+  email: string | null;
   passwordHash: string;
 }
 
@@ -233,6 +237,8 @@ export interface InformalQuotationRequest {
   stakeholderName: string;
   stakeholderPhone: string;
   stakeholderEmail: string;
+  billingAddress: string;
+  whatsappNumber: string;
   priceType: InformalQuotationPriceType;
   paymentType: InformalQuotationPaymentType;
   creditDays: number | null;
@@ -243,6 +249,20 @@ export interface InformalQuotationRequest {
   decisionNote: string | null;
   decidedBy: string | null;
   decidedAt: string | null;
+  quotationRef: string | null;
+  quotationPdfUrl: string | null;
+  quotationPdfS3Key: string | null;
+  pdfStatus: InformalQuotationPdfStatus;
+  pdfGeneratedAt: string | null;
+  pdfError: string | null;
+  emailStatus: InformalQuotationEmailStatus;
+  emailSentAt: string | null;
+  emailError: string | null;
+  emailTo: string | null;
+  emailCc: string[];
+  whatsappStatus: InformalQuotationWhatsappStatus;
+  whatsappSentAt: string | null;
+  whatsappError: string | null;
   createdBy: string;
   createdAt: string;
 }
@@ -281,6 +301,7 @@ export interface Plant {
   id: string;
   code: string;
   name: string;
+  unitName: string;
   region: string;
   status: PlantStatus;
   monthlyVolumeTarget: number;

@@ -11,8 +11,11 @@ import {
 } from "@/lib/commercial";
 import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
 import { readDatabase, updateDatabase } from "@/lib/db";
+import { sendGmail } from "@/lib/gmail-smtp";
+import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
 import { ocrService } from "@/lib/ocr";
 import { getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
+import { saveGeneratedBuffer } from "@/lib/storage";
 import type {
   AccountingDashboardData,
   AgentDashboardData,
@@ -1347,6 +1350,8 @@ export interface CreateInformalQuotationRequestInput {
   stakeholderName: string;
   stakeholderPhone: string;
   stakeholderEmail: string;
+  billingAddress: string;
+  whatsappNumber: string;
   priceType: InformalQuotationPriceType;
   paymentType: InformalQuotationPaymentType;
   creditDays?: number | null;
@@ -1415,6 +1420,65 @@ function normalizeEmail(value: string) {
   return email;
 }
 
+function normalizeOptionalEmail(value: string | null | undefined) {
+  const email = `${value ?? ""}`.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+function normalizePhoneNumber(value: string) {
+  const phone = value.trim().replace(/[^\d+]/g, "");
+  const digits = phone.replace(/\D/g, "");
+
+  if (digits.length < 10) {
+    throw new Error("Enter a valid WhatsApp number.");
+  }
+
+  return phone;
+}
+
+function getEmployeeEmail(user: User | null | undefined) {
+  if (!user) {
+    return null;
+  }
+
+  const employeeEnvKey = `EMPLOYEE_EMAIL_${user.employeeId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+  return normalizeOptionalEmail(user.email) ?? normalizeOptionalEmail(process.env[employeeEnvKey]);
+}
+
+function getFinancialYearLabel(value: string) {
+  const date = new Date(value);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const year = safeDate.getFullYear();
+  const month = safeDate.getMonth();
+  const startYear = month >= 3 ? year : year - 1;
+  const endYear = startYear + 1;
+  return `${String(startYear).slice(-2)}-${String(endYear).slice(-2)}`;
+}
+
+function getNextInformalQuotationRef(database: Database, dateIso: string) {
+  const financialYear = getFinancialYearLabel(dateIso);
+  const prefix = `SPDCPL/${financialYear}/`;
+  const nextSequence =
+    database.informalQuotationRequests
+      .map((entry) => entry.quotationRef)
+      .filter((ref): ref is string => Boolean(ref?.startsWith(prefix)))
+      .map((ref) => Number(ref.slice(prefix.length)))
+      .filter((sequence) => Number.isInteger(sequence) && sequence > 0)
+      .reduce((max, sequence) => Math.max(max, sequence), 0) + 1;
+
+  return `${prefix}${String(nextSequence).padStart(4, "0")}`;
+}
+
+function getInformalQuotationPdfFileName(request: InformalQuotationRequest) {
+  const ref = request.quotationRef ?? request.id;
+  return `quotation-${ref.replace(/[^a-zA-Z0-9-]/g, "-")}.pdf`;
+}
+
+function safeDeliveryError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Delivery failed.";
+  return message.slice(0, 700);
+}
+
 function requireSiteStakeholder(site: LeadSite, input: CreateInformalQuotationRequestInput) {
   const role = normalizeStakeholderRole(input.stakeholderRole);
   const name = input.stakeholderName.trim();
@@ -1456,6 +1520,8 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
 
     const stakeholder = requireSiteStakeholder(site, input);
     const stakeholderEmail = normalizeEmail(input.stakeholderEmail);
+    const billingAddress = input.billingAddress.trim();
+    const whatsappNumber = normalizePhoneNumber(input.whatsappNumber || stakeholder.phone);
     const items = normalizeInformalQuotationItems(input.items);
     const priceType = input.priceType === "NON_GST" ? "NON_GST" : "GST_INCLUSIVE";
     const paymentType = priceType === "NON_GST" ? "ADVANCE" : input.paymentType === "CREDIT" ? "CREDIT" : "ADVANCE";
@@ -1469,6 +1535,10 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
         throw new Error("Credit period days are required for credit payment.");
       }
       normalizedCreditDays = requestedCreditDays;
+    }
+
+    if (!billingAddress) {
+      throw new Error("Billing address is required for the informal quotation.");
     }
 
     if (!Number.isFinite(oneWayDistanceKm) || oneWayDistanceKm < 0) {
@@ -1506,6 +1576,8 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
       stakeholderName: stakeholder.name,
       stakeholderPhone: stakeholder.phone,
       stakeholderEmail,
+      billingAddress,
+      whatsappNumber,
       priceType,
       paymentType,
       creditDays: normalizedCreditDays,
@@ -1516,6 +1588,20 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
       decisionNote: null,
       decidedBy: null,
       decidedAt: null,
+      quotationRef: null,
+      quotationPdfUrl: null,
+      quotationPdfS3Key: null,
+      pdfStatus: "NOT_GENERATED",
+      pdfGeneratedAt: null,
+      pdfError: null,
+      emailStatus: "NOT_SENT",
+      emailSentAt: null,
+      emailError: null,
+      emailTo: null,
+      emailCc: [],
+      whatsappStatus: "NOT_SENT",
+      whatsappSentAt: null,
+      whatsappError: null,
       createdBy: user.id,
       createdAt: nowIso(),
     };
@@ -1534,7 +1620,7 @@ export async function decideInformalQuotationRequest(
 ) {
   assertRole(user, ["MANAGER"]);
 
-  return updateDatabase((database) => {
+  const decidedRequest = await updateDatabase((database) => {
     const request = database.informalQuotationRequests.find((entry) => entry.id === requestId);
 
     if (!request) {
@@ -1553,9 +1639,138 @@ export async function decideInformalQuotationRequest(
     request.decisionNote = decisionNote.trim() || (status === "APPROVED" ? "Approved by manager." : "Rejected by manager.");
     request.decidedBy = user.id;
     request.decidedAt = nowIso();
+    if (status === "APPROVED" && !request.quotationRef) {
+      request.quotationRef = getNextInformalQuotationRef(database, request.decidedAt);
+    }
     logAudit(database, user, "InformalQuotationRequest", request.id, status, request.decisionNote);
     return request;
   });
+
+  if (status === "APPROVED") {
+    return deliverApprovedInformalQuotation(user, decidedRequest.id);
+  }
+
+  return decidedRequest;
+}
+
+async function deliverApprovedInformalQuotation(manager: User, requestId: string) {
+  const database = await readDatabase();
+  const request = database.informalQuotationRequests.find((entry) => entry.id === requestId);
+
+  if (!request) {
+    throw new Error("Informal quotation request not found for delivery.");
+  }
+
+  if (request.status !== "APPROVED") {
+    return request;
+  }
+
+  const salesAgent = database.users.find((entry) => entry.id === request.createdBy) ?? null;
+  const managerUser = database.users.find((entry) => entry.id === request.decidedBy) ?? manager;
+  const plant = database.plants.find((entry) => entry.id === request.plantId) ?? null;
+  let pdfBuffer: Buffer;
+
+  try {
+    pdfBuffer = generateInformalQuotationPdf({ quotation: request, plant, manager: managerUser, salesAgent });
+    const fileName = getInformalQuotationPdfFileName(request);
+    const storedPdf = await saveGeneratedBuffer({
+      buffer: pdfBuffer,
+      fileName,
+      mimeType: "application/pdf",
+      directory: "quotations",
+    });
+
+    await updateDatabase((nextDatabase) => {
+      const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
+      if (!nextRequest) {
+        throw new Error("Informal quotation request not found while saving PDF status.");
+      }
+      nextRequest.quotationPdfUrl = storedPdf.fileUrl;
+      nextRequest.quotationPdfS3Key = storedPdf.s3Key;
+      nextRequest.pdfStatus = "GENERATED";
+      nextRequest.pdfGeneratedAt = nowIso();
+      nextRequest.pdfError = null;
+      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "PDF_GENERATED", `Generated quotation PDF ${nextRequest.quotationRef}.`);
+      return nextRequest;
+    });
+  } catch (error) {
+    const errorMessage = safeDeliveryError(error);
+    return updateDatabase((nextDatabase) => {
+      const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
+      if (!nextRequest) {
+        throw new Error("Informal quotation request not found while saving PDF failure.");
+      }
+      nextRequest.pdfStatus = "FAILED";
+      nextRequest.pdfError = errorMessage;
+      nextRequest.emailStatus = "FAILED";
+      nextRequest.emailError = `PDF generation failed: ${errorMessage}`;
+      nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
+      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "PDF_FAILED", errorMessage);
+      return nextRequest;
+    });
+  }
+
+  const ccEmails = [getEmployeeEmail(managerUser), getEmployeeEmail(salesAgent)].filter((email): email is string => Boolean(email));
+
+  try {
+    await sendGmail({
+      to: [request.stakeholderEmail],
+      cc: ccEmails,
+      subject: `Quotation ${request.quotationRef} - ${request.customerName}`,
+      text: [
+        `Dear ${request.stakeholderName},`,
+        "",
+        "Please find attached the approved SPD Concrete quotation.",
+        "",
+        `Reference: ${request.quotationRef}`,
+        `Project: ${request.siteName}`,
+        "",
+        "Regards,",
+        "SPD Concrete Pvt Ltd",
+      ].join("\n"),
+      attachments: [
+        {
+          filename: getInformalQuotationPdfFileName(request),
+          contentType: "application/pdf",
+          content: pdfBuffer,
+        },
+      ],
+    });
+
+    return updateDatabase((nextDatabase) => {
+      const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
+      if (!nextRequest) {
+        throw new Error("Informal quotation request not found while saving email status.");
+      }
+      nextRequest.emailStatus = "SENT";
+      nextRequest.emailSentAt = nowIso();
+      nextRequest.emailError = null;
+      nextRequest.emailTo = request.stakeholderEmail;
+      nextRequest.emailCc = ccEmails;
+      nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
+      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_SENT", `Sent quotation email to ${request.stakeholderEmail}.`);
+      return nextRequest;
+    });
+  } catch (error) {
+    const errorMessage = safeDeliveryError(error);
+    return updateDatabase((nextDatabase) => {
+      const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
+      if (!nextRequest) {
+        throw new Error("Informal quotation request not found while saving email failure.");
+      }
+      nextRequest.emailStatus = "FAILED";
+      nextRequest.emailSentAt = null;
+      nextRequest.emailError = errorMessage;
+      nextRequest.emailTo = request.stakeholderEmail;
+      nextRequest.emailCc = ccEmails;
+      nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
+      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_FAILED", errorMessage);
+      return nextRequest;
+    });
+  }
 }
 
 export interface CreateApprovalRequestInput {

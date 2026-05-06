@@ -27,6 +27,8 @@ frontend:
             "GEMINI_API_KEY",
             "GEMINI_CHAT_MODEL",
             "GEMINI_OCR_MODEL",
+            "GMAIL_APP_PASSWORD",
+            "GMAIL_SMTP_USER",
             "PREFLIGHT_ALLOW_EMPTY_FIREBASE",
             "PREFLIGHT_SKIP_GEMINI",
             "S3_ACCESS_KEY_ID",
@@ -39,6 +41,12 @@ frontend:
             "SUPABASE_USE_STORAGE",
             "SYSTEM_HEALTH_TOKEN",
           ];
+
+          for (const [key] of Object.entries(process.env)) {
+            if (key.startsWith("EMPLOYEE_EMAIL_")) {
+              keys.push(key);
+            }
+          }
 
           const lines = keys.flatMap((key) => {
             const value = process.env[key];

@@ -12,6 +12,8 @@ export async function POST(request: Request) {
       stakeholderName?: string;
       stakeholderPhone?: string;
       stakeholderEmail?: string;
+      billingAddress?: string;
+      whatsappNumber?: string;
       priceType?: string;
       paymentType?: string;
       creditDays?: number | string | null;
@@ -34,6 +36,8 @@ export async function POST(request: Request) {
       stakeholderName: `${body.stakeholderName ?? ""}`,
       stakeholderPhone: `${body.stakeholderPhone ?? ""}`,
       stakeholderEmail: `${body.stakeholderEmail ?? ""}`,
+      billingAddress: `${body.billingAddress ?? ""}`,
+      whatsappNumber: `${body.whatsappNumber ?? ""}`,
       priceType: `${body.priceType ?? "GST_INCLUSIVE"}` as InformalQuotationPriceType,
       paymentType: `${body.paymentType ?? "ADVANCE"}` as InformalQuotationPaymentType,
       creditDays: body.creditDays === null || body.creditDays === undefined || `${body.creditDays}`.trim() === "" ? null : Number(body.creditDays),

@@ -183,20 +183,24 @@ async function saveToSupabaseStorage(
 async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, mimeType: string) {
   const { bucket, region, client } = getS3Config();
 
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: bucketPath,
-    Body: new Uint8Array(buffer),
-    ContentType: mimeType,
-  });
-
-  await client.send(command);
+  await putS3Object(client, bucket, bucketPath, buffer, mimeType);
 
   return {
     photoUrl: buildS3ObjectUrl(bucketPath, bucket, region),
     originalFileName: file.name || path.basename(bucketPath),
     localAbsolutePath: null,
   };
+}
+
+async function putS3Object(client: S3Client, bucket: string, key: string, buffer: Buffer, mimeType: string) {
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: new Uint8Array(buffer),
+    ContentType: mimeType,
+  });
+
+  await client.send(command);
 }
 
 export async function createPresignedS3PutUrl(input: {
@@ -340,5 +344,45 @@ export async function saveUploadedFile(file: File, buffer?: Buffer) {
     photoUrl: `/local-uploads/${relativeDir.replaceAll("\\", "/")}/${fileName}`,
     originalFileName: file.name || fileName,
     localAbsolutePath: absolutePath,
+  };
+}
+
+export async function saveGeneratedBuffer(input: {
+  buffer: Buffer;
+  fileName: string;
+  mimeType: string;
+  directory?: string;
+}) {
+  const dateDir = new Date().toISOString().slice(0, 7);
+  const safeFileName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const relativeDir = path.join(input.directory?.trim() || "generated", dateDir);
+  const bucketPath = `${relativeDir.replaceAll("\\", "/")}/${safeFileName}`;
+
+  if (shouldUseS3Storage()) {
+    const { bucket, region, client } = getS3Config();
+    await putS3Object(client, bucket, bucketPath, input.buffer, input.mimeType);
+
+    return {
+      fileUrl: buildS3ObjectUrl(bucketPath, bucket, region),
+      s3Key: bucketPath,
+      localAbsolutePath: null,
+      originalFileName: safeFileName,
+    };
+  }
+
+  if (!canUseLocalUploadFallback()) {
+    throw new Error("Durable generated-file storage is unavailable. Configure S3 for production quotation PDFs.");
+  }
+
+  const absoluteDir = path.join(storageRoot, relativeDir);
+  const absolutePath = path.join(absoluteDir, safeFileName);
+  await mkdir(absoluteDir, { recursive: true });
+  await writeFile(absolutePath, input.buffer);
+
+  return {
+    fileUrl: `/local-uploads/${relativeDir.replaceAll("\\", "/")}/${safeFileName}`,
+    s3Key: null,
+    localAbsolutePath: absolutePath,
+    originalFileName: safeFileName,
   };
 }

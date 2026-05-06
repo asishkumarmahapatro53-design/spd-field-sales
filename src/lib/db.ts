@@ -26,7 +26,14 @@ function requireDurableDatabase(context: string): never {
   );
 }
 
-function createUserSeed(employeeId: string, name: string, role: User["role"], password: string, homePlantId: string | null): User {
+function createUserSeed(
+  employeeId: string,
+  name: string,
+  role: User["role"],
+  password: string,
+  homePlantId: string | null,
+  email: string | null = null,
+): User {
   return {
     id: randomUUID(),
     employeeId,
@@ -34,6 +41,7 @@ function createUserSeed(employeeId: string, name: string, role: User["role"], pa
     role,
     status: "ACTIVE",
     homePlantId,
+    email,
     passwordHash: hashPassword(password),
   };
 }
@@ -46,6 +54,7 @@ function createMixDesignUserSeed(): User {
     role: "MIX_DESIGN",
     status: "ACTIVE",
     homePlantId: null,
+    email: null,
     passwordHash: hashPassword("password123"),
   };
 }
@@ -56,6 +65,7 @@ function createPlantSeeds() {
       id: DEFAULT_PLANT_IDS[0],
       code: "PLANT_A",
       name: "Plant A",
+      unitName: "Andharua",
       region: "North Cluster",
       status: "ACTIVE" as const,
       monthlyVolumeTarget: 5000,
@@ -65,6 +75,7 @@ function createPlantSeeds() {
       id: DEFAULT_PLANT_IDS[1],
       code: "PLANT_B",
       name: "Plant B",
+      unitName: "Central",
       region: "Central Cluster",
       status: "WATCH" as const,
       monthlyVolumeTarget: 5000,
@@ -74,6 +85,7 @@ function createPlantSeeds() {
       id: DEFAULT_PLANT_IDS[2],
       code: "PLANT_C",
       name: "Plant C",
+      unitName: "South",
       region: "South Cluster",
       status: "ACTIVE" as const,
       monthlyVolumeTarget: 5000,
@@ -438,6 +450,9 @@ function normalizeDatabase(rawDatabase: Database) {
   const database = rawDatabase as Database & Partial<Database>;
 
   database.plants ??= createPlantSeeds();
+  database.plants.forEach((plant) => {
+    plant.unitName ??= plant.name;
+  });
   database.fleetVehicles ??= createFleetSeed();
   database.materialCostSnapshots ??= createMaterialCostSeeds();
   database.priceBenchmarks ??= createPriceBenchmarkSeeds();
@@ -448,6 +463,10 @@ function normalizeDatabase(rawDatabase: Database) {
     database.users.push(createMixDesignUserSeed());
   }
   const fallbackPlantId = getFallbackPlantId(database as Database);
+
+  (database.users ?? []).forEach((user) => {
+    user.email ??= null;
+  });
 
   const salesAgents = (database.users ?? []).filter((entry) => entry.role === "SALES_AGENT");
   salesAgents.forEach((user, index) => {
@@ -572,6 +591,8 @@ function normalizeDatabase(rawDatabase: Database) {
     request.siteAddress ??= linkedSite?.siteAddress ?? linkedLead?.siteAddress ?? "";
     request.stakeholderLabel ??= request.stakeholderRole ?? "Stakeholder";
     request.stakeholderPhone ??= "";
+    request.billingAddress ??= request.siteAddress || linkedSite?.siteAddress || linkedLead?.siteAddress || "";
+    request.whatsappNumber ??= request.stakeholderPhone;
     request.priceType ??= "GST_INCLUSIVE";
     request.paymentType = request.priceType === "NON_GST" ? "ADVANCE" : request.paymentType ?? "ADVANCE";
     request.creditDays = request.paymentType === "CREDIT" ? request.creditDays ?? null : null;
@@ -587,6 +608,20 @@ function normalizeDatabase(rawDatabase: Database) {
     request.decisionNote ??= null;
     request.decidedBy ??= null;
     request.decidedAt ??= null;
+    request.quotationRef ??= null;
+    request.quotationPdfUrl ??= null;
+    request.quotationPdfS3Key ??= null;
+    request.pdfStatus ??= request.quotationPdfUrl ? "GENERATED" : "NOT_GENERATED";
+    request.pdfGeneratedAt ??= null;
+    request.pdfError ??= null;
+    request.emailStatus ??= "NOT_SENT";
+    request.emailSentAt ??= null;
+    request.emailError ??= null;
+    request.emailTo ??= null;
+    request.emailCc ??= [];
+    request.whatsappStatus ??= "NOT_SENT";
+    request.whatsappSentAt ??= null;
+    request.whatsappError ??= null;
   });
 
   database.salesOrderRequests ??= [];
