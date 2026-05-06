@@ -19,6 +19,7 @@ export interface WatermarkOptions {
   siteAddress?: string;
   lat?: number;
   lng?: number;
+  capturedAtIso?: string | null;
   compression?: CompressionOptions;
 }
 
@@ -57,8 +58,9 @@ async function compressWithWatermark(img: HTMLImageElement, file: File, opts: Wa
   const minimumQuality = clampQuality(compression.minimumQuality ?? 0.42);
   const qualityStep = Math.max(0.04, compression.qualityStep ?? 0.08);
 
+  const watermarkTimestamp = resolveWatermarkTimestamp(file, opts);
   let dimension = maxDimension;
-  let canvas = drawWatermarkedCanvas(img, opts, dimension);
+  let canvas = drawWatermarkedCanvas(img, opts, dimension, watermarkTimestamp);
   let bestBlob = await canvasToWebpBlob(canvas, initialQuality);
 
   while (bestBlob.size > targetMaxBytes) {
@@ -91,7 +93,7 @@ async function compressWithWatermark(img: HTMLImageElement, file: File, opts: Wa
     }
 
     dimension = nextDimension;
-    canvas = drawWatermarkedCanvas(img, opts, dimension);
+    canvas = drawWatermarkedCanvas(img, opts, dimension, watermarkTimestamp);
     bestBlob = await canvasToWebpBlob(canvas, Math.min(initialQuality, 0.68));
   }
 
@@ -101,7 +103,7 @@ async function compressWithWatermark(img: HTMLImageElement, file: File, opts: Wa
   });
 }
 
-function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, maxDimension: number) {
+function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, maxDimension: number, capturedAt: Date) {
   const canvas = document.createElement("canvas");
   const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
   canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -114,9 +116,8 @@ function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, ma
 
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-  const now = new Date();
-  const dateStr = now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  const timeStr = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const dateStr = capturedAt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const timeStr = capturedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
   const lines: string[] = [];
   if (opts.siteName) {
@@ -151,6 +152,22 @@ function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, ma
   });
 
   return canvas;
+}
+
+function resolveWatermarkTimestamp(file: File, opts: WatermarkOptions) {
+  const fromInput = opts.capturedAtIso ? new Date(opts.capturedAtIso) : null;
+  if (fromInput && !Number.isNaN(fromInput.getTime())) {
+    return fromInput;
+  }
+
+  if (Number.isFinite(file.lastModified) && file.lastModified > 0) {
+    const fromFile = new Date(file.lastModified);
+    if (!Number.isNaN(fromFile.getTime())) {
+      return fromFile;
+    }
+  }
+
+  return new Date();
 }
 
 function canvasToWebpBlob(canvas: HTMLCanvasElement, quality: number) {
