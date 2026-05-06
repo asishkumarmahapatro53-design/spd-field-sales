@@ -20,6 +20,7 @@ export interface WatermarkOptions {
   lat?: number;
   lng?: number;
   capturedAtIso?: string | null;
+  includeWatermark?: boolean;
   compression?: CompressionOptions;
 }
 
@@ -60,7 +61,7 @@ async function compressWithWatermark(img: HTMLImageElement, file: File, opts: Wa
 
   const watermarkTimestamp = resolveWatermarkTimestamp(file, opts);
   let dimension = maxDimension;
-  let canvas = drawWatermarkedCanvas(img, opts, dimension, watermarkTimestamp);
+  let canvas = opts.includeWatermark === false ? drawPlainCanvas(img, dimension) : drawWatermarkedCanvas(img, opts, dimension, watermarkTimestamp);
   let bestBlob = await canvasToWebpBlob(canvas, initialQuality);
 
   while (bestBlob.size > targetMaxBytes) {
@@ -93,17 +94,20 @@ async function compressWithWatermark(img: HTMLImageElement, file: File, opts: Wa
     }
 
     dimension = nextDimension;
-    canvas = drawWatermarkedCanvas(img, opts, dimension, watermarkTimestamp);
+    canvas = opts.includeWatermark === false ? drawPlainCanvas(img, dimension) : drawWatermarkedCanvas(img, opts, dimension, watermarkTimestamp);
     bestBlob = await canvasToWebpBlob(canvas, Math.min(initialQuality, 0.68));
   }
 
-  return new File([bestBlob], file.name.replace(/\.[^.]+$/, ".webp"), {
+  const baseName = file.name.replace(/\.[^.]+$/, "").replace(/[^\w.-]/g, "_").slice(0, 80) || "photo";
+  const stampedName = `${baseName}_${formatCompactTimestamp(watermarkTimestamp)}.webp`;
+
+  return new File([bestBlob], stampedName, {
     type: "image/webp",
-    lastModified: Date.now(),
+    lastModified: watermarkTimestamp.getTime(),
   });
 }
 
-function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, maxDimension: number, capturedAt: Date) {
+function createScaledCanvas(img: HTMLImageElement, maxDimension: number) {
   const canvas = document.createElement("canvas");
   const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
   canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -115,6 +119,15 @@ function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, ma
   }
 
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return { canvas, ctx };
+}
+
+function drawPlainCanvas(img: HTMLImageElement, maxDimension: number) {
+  return createScaledCanvas(img, maxDimension).canvas;
+}
+
+function drawWatermarkedCanvas(img: HTMLImageElement, opts: WatermarkOptions, maxDimension: number, capturedAt: Date) {
+  const { canvas, ctx } = createScaledCanvas(img, maxDimension);
 
   const dateStr = capturedAt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   const timeStr = capturedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -168,6 +181,16 @@ function resolveWatermarkTimestamp(file: File, opts: WatermarkOptions) {
   }
 
   return new Date();
+}
+
+function formatCompactTimestamp(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hour = String(value.getHours()).padStart(2, "0");
+  const minute = String(value.getMinutes()).padStart(2, "0");
+  const second = String(value.getSeconds()).padStart(2, "0");
+  return `${year}${month}${day}_${hour}${minute}${second}`;
 }
 
 function canvasToWebpBlob(canvas: HTMLCanvasElement, quality: number) {

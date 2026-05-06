@@ -1034,6 +1034,7 @@ export async function createSiteVisit(
         : null;
 
     const isNewSite = !site;
+    const savedLatLngBeforeVisit = site?.latLng ?? null;
 
     if (!site) {
       site = {
@@ -1058,7 +1059,7 @@ export async function createSiteVisit(
     } else {
       site.siteName = input.siteName.trim() || site.siteName;
       site.siteAddress = resolvedSiteAddress || site.siteAddress;
-      site.latLng = site.latLng ?? detectedLatLng ?? input.latLng ?? null;
+      site.latLng = detectedLatLng ?? input.latLng ?? site.latLng ?? null;
       site.stakeholders = dedupeStakeholders([...site.stakeholders, ...stakeholders]);
       site.expectedSupplyWindow = input.expectedSupplyWindow;
       site.futureScope = input.futureScope;
@@ -1082,7 +1083,7 @@ export async function createSiteVisit(
             distanceMeters: null,
           }
         : getLocationVerification({
-            savedLatLng: site.latLng,
+            savedLatLng: savedLatLngBeforeVisit,
             detectedLatLng,
           });
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { GpsCamera } from "@/components/agent/GpsCamera";
+import { GpsCamera, type PhotoCaptureSource } from "@/components/agent/GpsCamera";
 import { getLocationPayload, parseApiError, toDateTimeLocalValue, uploadDirectFile, type PresignedUploadPayload } from "@/components/agent/action-helpers";
 import { reverseGeocode } from "@/lib/image-utils";
 import { EXPECTED_SUPPLY_OPTIONS, getLocationVerification, getStakeholderLabel, STAKEHOLDER_OPTIONS, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
@@ -152,6 +152,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
   const [arrivalPhoto, setArrivalPhoto] = useState<File | null>(null);
   const [arrivalPhotoUpload, setArrivalPhotoUpload] = useState<PresignedUploadPayload | null>(null);
   const [arrivalPhotoCoords, setArrivalPhotoCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [arrivalPhotoSource, setArrivalPhotoSource] = useState<PhotoCaptureSource>("camera");
   const [voiceNoteUpload, setVoiceNoteUpload] = useState<PresignedUploadPayload | null>(null);
   const [voiceTranscript, setVoiceTranscript] = useState<VoiceNoteTranscript | null>(null);
   const [voiceTranscriptBusy, setVoiceTranscriptBusy] = useState(false);
@@ -258,6 +259,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     setArrivalPhoto(null);
     setArrivalPhotoUpload(null);
     setArrivalPhotoCoords(null);
+    setArrivalPhotoSource("camera");
     setVoiceNoteUpload(null);
     setVoiceTranscript(null);
     setVoiceTranscriptBusy(false);
@@ -338,12 +340,13 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     setAnalysisBusy(false);
   }
 
-  async function handleArrivalPhotoCapture(file: File, coords: { lat: number; lng: number } | null) {
+  async function handleArrivalPhotoCapture(file: File, coords: { lat: number; lng: number } | null, source: PhotoCaptureSource) {
     setArrivalPhoto(file);
     setArrivalPhotoUpload(null);
-    setArrivalPhotoCoords(coords);
+    setArrivalPhotoCoords(source === "camera" ? coords : null);
+    setArrivalPhotoSource(source);
 
-    if (!usingExistingSite && coords && !siteAddressEdited) {
+    if (source === "camera" && !usingExistingSite && coords && !siteAddressEdited) {
       const geocodedAddress = await reverseGeocode(coords.lat, coords.lng).catch(() => null);
       if (geocodedAddress) {
         setSiteAddress(geocodedAddress);
@@ -448,6 +451,12 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       return;
     }
 
+    if (arrivalPhotoSource === "gallery" && (!analysis?.siteAddress || !analysis.latLng)) {
+      setError("Uploaded past site visit photos must have a readable GPS watermark address and coordinates.");
+      setBusy(false);
+      return;
+    }
+
     if (!usingExistingSite && !siteName.trim()) {
       setError("Site name is required.");
       setBusy(false);
@@ -477,9 +486,19 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
         (remarksVoiceNote instanceof File && remarksVoiceNote.size > 0
           ? await uploadDirectFile(remarksVoiceNote, "site-visit-voice")
           : null);
-      const location = arrivalPhotoCoords
-        ? { lat: String(arrivalPhotoCoords.lat), lng: String(arrivalPhotoCoords.lng) }
-        : await getLocationPayload();
+      const fallbackPhotoCapturedAt =
+        Number.isFinite(arrivalPhoto.lastModified) && arrivalPhoto.lastModified > 0
+          ? new Date(arrivalPhoto.lastModified).toISOString()
+          : "";
+      const visitCoords = arrivalPhotoSource === "gallery" ? analysis?.latLng ?? null : arrivalPhotoCoords ?? analysis?.latLng ?? null;
+      const location = visitCoords
+        ? { lat: String(visitCoords.lat), lng: String(visitCoords.lng) }
+        : arrivalPhotoSource === "camera"
+          ? await getLocationPayload()
+          : { lat: "", lng: "" };
+      const resolvedSiteAddress =
+        analysis?.siteAddress ??
+        (usingExistingSite && selectedSite ? selectedSite.siteAddress : siteAddress.trim());
 
       const response = await fetch("/api/site-visits", {
         method: "POST",
@@ -501,7 +520,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           leadId: visitMode === "EXISTING_LEAD" ? leadId : "",
           siteId: usingExistingSite && selectedSite ? selectedSite.id : "",
           siteName: usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim(),
-          siteAddress: usingExistingSite && selectedSite ? selectedSite.siteAddress : siteAddress.trim(),
+          siteAddress: resolvedSiteAddress,
           stakeholders: JSON.stringify(encounteredStakeholders),
           concreteGrade: formData.get("concreteGrade"),
           quantityCum: formData.get("quantityCum"),
@@ -514,10 +533,10 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           leadStage,
           nextFollowUpAt,
           score: String(suggestedScore),
-          photoWatermarkAddress: analysis?.siteAddress ?? siteAddress.trim(),
-          photoCapturedAt: analysis?.capturedAt ?? "",
-          detectedLat: analysis?.latLng ? String(analysis.latLng.lat) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lat) : "",
-          detectedLng: analysis?.latLng ? String(analysis.latLng.lng) : arrivalPhotoCoords ? String(arrivalPhotoCoords.lng) : "",
+          photoWatermarkAddress: analysis?.siteAddress ?? "",
+          photoCapturedAt: analysis?.capturedAt ?? fallbackPhotoCapturedAt,
+          detectedLat: analysis?.latLng ? String(analysis.latLng.lat) : arrivalPhotoSource === "camera" && arrivalPhotoCoords ? String(arrivalPhotoCoords.lat) : "",
+          detectedLng: analysis?.latLng ? String(analysis.latLng.lng) : arrivalPhotoSource === "camera" && arrivalPhotoCoords ? String(arrivalPhotoCoords.lng) : "",
         }),
       });
 
@@ -533,6 +552,7 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       setArrivalPhoto(null);
       setArrivalPhotoUpload(null);
       setArrivalPhotoCoords(null);
+      setArrivalPhotoSource("camera");
       setVoiceNoteUpload(null);
       setVoiceTranscript(null);
       setVoiceTranscriptError("");
@@ -671,8 +691,8 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           agentName={agentName}
           employeeId={employeeId}
           siteName={usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim() || undefined}
-          onCapture={(file, coords) => {
-            void handleArrivalPhotoCapture(file, coords);
+          onCapture={(file, coords, source) => {
+            void handleArrivalPhotoCapture(file, coords, source);
           }}
           disabled={busy || analysisBusy}
         />

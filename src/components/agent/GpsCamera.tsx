@@ -5,7 +5,7 @@ import { getCurrentPosition, reverseGeocode, watermarkAndCompress, type Compress
 
 interface GpsCameraProps {
   label?: string;
-  onCapture: (file: File, coords: { lat: number; lng: number } | null) => void;
+  onCapture: (file: File, coords: { lat: number; lng: number } | null, source: PhotoCaptureSource) => void;
   siteName?: string;
   agentName: string;
   employeeId: string;
@@ -14,6 +14,7 @@ interface GpsCameraProps {
 }
 
 type CameraState = "idle" | "acquiring-gps" | "processing" | "ready" | "error";
+export type PhotoCaptureSource = "camera" | "gallery";
 
 export function GpsCamera({
   label = "Take Photo",
@@ -31,6 +32,7 @@ export function GpsCamera({
   const [errorMsg, setErrorMsg] = useState("");
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [captureSource, setCaptureSource] = useState<PhotoCaptureSource>("camera");
   const isBusy = disabled || state === "acquiring-gps" || state === "processing";
 
   useEffect(() => {
@@ -41,7 +43,7 @@ export function GpsCamera({
     };
   }, [preview]);
 
-  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>, source: PhotoCaptureSource) {
     const raw = event.target.files?.[0];
     if (!raw) {
       return;
@@ -51,10 +53,11 @@ export function GpsCamera({
     clearPreview();
     setErrorMsg("");
     setCapturedFile(null);
-    setState("acquiring-gps");
+    setCaptureSource(source);
+    setState(source === "camera" ? "acquiring-gps" : "processing");
 
     try {
-      const position = await getCurrentPosition();
+      const position = source === "camera" ? await getCurrentPosition() : null;
       const gpsCoords = position ? { lat: position.latitude, lng: position.longitude } : null;
       setCoords(gpsCoords);
       setState("processing");
@@ -72,6 +75,7 @@ export function GpsCamera({
         siteAddress,
         lat: gpsCoords?.lat,
         lng: gpsCoords?.lng,
+        includeWatermark: source === "camera",
         compression,
       });
 
@@ -91,7 +95,7 @@ export function GpsCamera({
       return;
     }
 
-    onCapture(capturedFile, coords);
+    onCapture(capturedFile, coords, captureSource);
     clearPreview();
     setCapturedFile(null);
     setState("idle");
@@ -131,7 +135,7 @@ export function GpsCamera({
         accept="image/*"
         capture="environment"
         className="gps-camera-input"
-        onChange={handleFileChange}
+        onChange={(event) => void handleFileChange(event, "camera")}
         disabled={isBusy}
       />
 
@@ -140,7 +144,7 @@ export function GpsCamera({
         type="file"
         accept="image/*"
         className="gps-camera-input"
-        onChange={handleFileChange}
+        onChange={(event) => void handleFileChange(event, "gallery")}
         disabled={isBusy}
       />
 
@@ -182,6 +186,8 @@ export function GpsCamera({
           <img src={preview} alt="Watermarked preview" className="gps-preview-img" />
           {coords ? (
             <p className="gps-coords-label">GPS: {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}</p>
+          ) : captureSource === "gallery" ? (
+            <p className="gps-coords-label">Gallery upload - GPS will be read from the photo watermark if available</p>
           ) : (
             <p className="gps-coords-label gps-coords-warn">GPS unavailable - location not embedded</p>
           )}
