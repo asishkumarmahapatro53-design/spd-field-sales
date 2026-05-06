@@ -1213,6 +1213,89 @@ textarea {
   margin-bottom: 0;
 }
 
+.quotation-line-card,
+.quotation-review-shell {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.quotation-line-card .panel-header {
+  margin-bottom: 0;
+}
+
+.quotation-document {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid rgba(16, 35, 63, 0.22);
+  border-radius: 10px;
+  background: #fffdfa;
+  color: #111827;
+  font-family: "Times New Roman", Times, serif;
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: 0 18px 34px rgba(16, 35, 63, 0.08);
+}
+
+.quotation-document p {
+  margin: 0;
+}
+
+.quotation-document-letterhead {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(16, 35, 63, 0.18);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.quotation-document-letterhead span {
+  text-transform: none;
+  font-weight: 400;
+}
+
+.quotation-document-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.quotation-document-field {
+  word-break: break-word;
+}
+
+.quotation-document-field strong {
+  font-weight: 700;
+}
+
+.quotation-table-wrap {
+  overflow-x: auto;
+}
+
+.quotation-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.quotation-table th,
+.quotation-table td {
+  padding: 8px;
+  border: 1px solid rgba(16, 35, 63, 0.22);
+  text-align: left;
+  vertical-align: top;
+}
+
+.quotation-table th {
+  font-weight: 700;
+  background: rgba(16, 35, 63, 0.06);
+}
+
 .reading-stat-grid,
 .summary-card-grid {
   display: grid;
@@ -1725,6 +1808,14 @@ th {
 
   .details-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .quotation-document-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .quotation-document-letterhead {
+    display: grid;
   }
 
   .summary-card-compact .summary-card-grid {

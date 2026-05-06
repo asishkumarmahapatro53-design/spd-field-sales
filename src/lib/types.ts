@@ -11,6 +11,9 @@ export type ReadingStatus =
   | "MANUAL_VERIFIED";
 export type LeadStage = "TALKS" | "NEGOTIATING" | "FINALIZED" | "MISSED";
 export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type InformalQuotationStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type InformalQuotationPriceType = "GST_INCLUSIVE" | "NON_GST";
+export type InformalQuotationPaymentType = "ADVANCE" | "CREDIT";
 export type TaskStatus = "OPEN" | "DONE";
 export type HelpRequestStatus = "OPEN" | "RESOLVED";
 export type FleetVehicleStatus = "ACTIVE" | "IDLE" | "SERVICE" | "OFF_ROUTE";
@@ -204,6 +207,42 @@ export interface ApprovalRequest {
   decidedBy: string | null;
   decidedAt: string | null;
   decisionNote: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface InformalQuotationLineItem {
+  id: string;
+  grade: string;
+  quantityCum: number;
+  mixDesignType: MixDesignType;
+  mixRequirement: string;
+  pricePerCum: number;
+}
+
+export interface InformalQuotationRequest {
+  id: string;
+  leadId: string;
+  siteId: string;
+  plantId: string;
+  customerName: string;
+  siteName: string;
+  siteAddress: string;
+  stakeholderRole: StakeholderRole;
+  stakeholderLabel: string;
+  stakeholderName: string;
+  stakeholderPhone: string;
+  stakeholderEmail: string;
+  priceType: InformalQuotationPriceType;
+  paymentType: InformalQuotationPaymentType;
+  creditDays: number | null;
+  oneWayDistanceKm: number;
+  trafficPostCount: number;
+  items: InformalQuotationLineItem[];
+  status: InformalQuotationStatus;
+  decisionNote: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
   createdBy: string;
   createdAt: string;
 }
@@ -476,6 +515,7 @@ export interface Database {
   leads: Lead[];
   leadSites: LeadSite[];
   approvalRequests: ApprovalRequest[];
+  informalQuotationRequests: InformalQuotationRequest[];
   tasks: Task[];
   helpRequests: HelpRequest[];
   targets: Target[];
@@ -522,6 +562,7 @@ export interface AgentDashboardData {
   leadSites: LeadSite[];
   tasks: Task[];
   approvals: ApprovalRequest[];
+  informalQuotationRequests: InformalQuotationRequest[];
   salesOrderRequests: SalesOrderRequest[];
   reimbursementClaims: ReimbursementClaim[];
   targets: Target[];
@@ -540,6 +581,7 @@ export interface ManagerDashboardData {
   workdaySessions: WorkdaySession[];
   leads: Lead[];
   approvals: ApprovalRequest[];
+  informalQuotationRequests: InformalQuotationRequest[];
   salesOrderRequests: SalesOrderRequest[];
   helpRequests: HelpRequest[];
   tasks: Task[];

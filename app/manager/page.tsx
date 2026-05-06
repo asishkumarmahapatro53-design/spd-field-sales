@@ -10,6 +10,8 @@ export default async function ManagerPage() {
   const user = await requireUser("MANAGER");
   const data = await getManagerDashboardData(user);
   const pendingApprovals = data.approvals.filter((entry) => entry.status === "PENDING").length;
+  const pendingInformalQuotations = data.informalQuotationRequests.filter((entry) => entry.status === "PENDING").length;
+  const pendingCommercialDecisions = pendingApprovals + pendingInformalQuotations;
   const pendingOrders = data.salesOrderRequests.filter((entry) => entry.status === "SCHEDULE_PENDING").length;
   const openCorrections = data.helpRequests.filter((entry) => entry.status === "OPEN").length;
   const openSessions = data.workdaySessions.filter((entry) => entry.status === "OPEN").length;
@@ -34,7 +36,9 @@ export default async function ManagerPage() {
       activeToday: data.workdaySessions.filter(
         (session) => session.plantId === plant.id && session.date === todayKey && plantAgentIds.has(session.userId),
       ).length,
-      pendingApprovals: data.approvals.filter((entry) => entry.plantId === plant.id && entry.status === "PENDING").length,
+      pendingApprovals:
+        data.approvals.filter((entry) => entry.plantId === plant.id && entry.status === "PENDING").length +
+        data.informalQuotationRequests.filter((entry) => entry.plantId === plant.id && entry.status === "PENDING").length,
     };
   });
 
@@ -50,7 +54,7 @@ export default async function ManagerPage() {
 
       <section className="metric-grid mt-24">
         <MetricCard label="Agents on duty" value={openSessions} note="Open workday sessions across plants" />
-        <MetricCard label="Pending decisions" value={pendingApprovals} note="Commercial approvals waiting" />
+        <MetricCard label="Pending decisions" value={pendingCommercialDecisions} note="Final approvals and informal quotations waiting" />
         <MetricCard label="Pending orders" value={pendingOrders} note="Sales/SLA requests waiting for decision" />
         <MetricCard label="Open corrections" value={openCorrections} note="Agent support requests" />
       </section>
@@ -75,8 +79,8 @@ export default async function ManagerPage() {
         <ManagerWorkspaceCard
           eyebrow="Commercial"
           title="Pending Approvals"
-          value={pendingApprovals}
-          note="Review price requests in a focused decision page instead of stacking approval cards on the main dashboard."
+          value={pendingCommercialDecisions}
+          note="Review final price requests and informal quotation documents in one focused decision page."
           href="/manager/approvals"
         />
         <ManagerWorkspaceCard

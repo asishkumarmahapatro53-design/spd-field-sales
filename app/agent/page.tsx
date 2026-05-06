@@ -56,6 +56,7 @@ export default async function AgentPage() {
           leads={data.leads}
           leadSites={data.leadSites}
           approvals={data.approvals}
+          informalQuotationRequests={data.informalQuotationRequests}
           salesOrderRequests={data.salesOrderRequests}
         />
       </Panel>

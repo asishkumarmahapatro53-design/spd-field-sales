@@ -23,6 +23,11 @@ import type {
   Database,
   ExpectedSupplyWindow,
   HelpRequest,
+  InformalQuotationLineItem,
+  InformalQuotationPaymentType,
+  InformalQuotationPriceType,
+  InformalQuotationRequest,
+  InformalQuotationStatus,
   LatLng,
   Lead,
   LeadSite,
@@ -1326,6 +1331,233 @@ export async function updateLead(
   });
 }
 
+export interface CreateInformalQuotationLineItemInput {
+  id?: string;
+  grade: string;
+  quantityCum: number;
+  mixDesignType: MixDesignType;
+  mixRequirement?: string;
+  pricePerCum: number;
+}
+
+export interface CreateInformalQuotationRequestInput {
+  leadId: string;
+  siteId: string;
+  stakeholderRole: StakeholderContact["role"];
+  stakeholderName: string;
+  stakeholderPhone: string;
+  stakeholderEmail: string;
+  priceType: InformalQuotationPriceType;
+  paymentType: InformalQuotationPaymentType;
+  creditDays?: number | null;
+  oneWayDistanceKm: number;
+  trafficPostCount: number;
+  items: CreateInformalQuotationLineItemInput[];
+}
+
+function normalizeInformalQuotationItems(items: CreateInformalQuotationLineItemInput[]) {
+  if (items.length > 3) {
+    throw new Error("Only three grades can be added to one informal quotation request.");
+  }
+
+  const normalizedItems = items
+    .slice(0, 3)
+    .map<InformalQuotationLineItem>((item, index) => {
+      const grade = item.grade.trim().toUpperCase();
+      const quantityCum = Number(item.quantityCum);
+      const pricePerCum = Math.round(Number(item.pricePerCum) * 100) / 100;
+      const mixDesignType = item.mixDesignType === "NOMINAL_MIX" ? "NOMINAL_MIX" : "DESIGN_MIX";
+      const mixRequirement = `${item.mixRequirement ?? ""}`.trim();
+
+      if (!grade) {
+        throw new Error(`Grade ${index + 1} is required.`);
+      }
+
+      if (!Number.isFinite(quantityCum) || quantityCum <= 0) {
+        throw new Error(`Enter a valid quantity for ${grade}.`);
+      }
+
+      if (!Number.isFinite(pricePerCum) || pricePerCum <= 0) {
+        throw new Error(`Enter a valid price for ${grade}.`);
+      }
+
+      if (mixDesignType === "DESIGN_MIX" && !mixRequirement) {
+        throw new Error(`Specific mix requirement is required for ${grade}.`);
+      }
+
+      return {
+        id: item.id?.trim() || randomUUID(),
+        grade,
+        quantityCum,
+        mixDesignType,
+        mixRequirement: mixDesignType === "DESIGN_MIX" ? mixRequirement : "Nominal mix",
+        pricePerCum,
+      };
+    });
+
+  if (!normalizedItems.length) {
+    throw new Error("Add at least one quotation grade.");
+  }
+
+  const grades = new Set(normalizedItems.map((item) => item.grade));
+  if (grades.size !== normalizedItems.length) {
+    throw new Error("Each informal quotation grade must be unique.");
+  }
+
+  return normalizedItems;
+}
+
+function normalizeEmail(value: string) {
+  const email = value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Enter a valid stakeholder email address.");
+  }
+  return email;
+}
+
+function requireSiteStakeholder(site: LeadSite, input: CreateInformalQuotationRequestInput) {
+  const role = normalizeStakeholderRole(input.stakeholderRole);
+  const name = input.stakeholderName.trim();
+  const phone = input.stakeholderPhone.trim();
+
+  if (role === "FOUND_NO_ONE" || !name) {
+    throw new Error("Choose a real stakeholder for the informal quotation.");
+  }
+
+  const stakeholder = site.stakeholders.find(
+    (entry) =>
+      normalizeStakeholderRole(entry.role) === role &&
+      entry.name.trim().toLowerCase() === name.toLowerCase() &&
+      `${entry.phone ?? ""}`.trim() === phone,
+  );
+
+  if (!stakeholder) {
+    throw new Error("Choose a stakeholder saved under this site.");
+  }
+
+  return {
+    role,
+    label: stakeholder.label || getStakeholderLabel(role),
+    name: stakeholder.name.trim(),
+    phone: stakeholder.phone.trim(),
+  };
+}
+
+export async function createInformalQuotationRequest(user: User, input: CreateInformalQuotationRequestInput) {
+  assertRole(user, ["SALES_AGENT"]);
+
+  return updateDatabase((database) => {
+    const lead = requireLeadForUser(database, user, input.leadId);
+    const site = requireLeadSite(database, lead.id, input.siteId);
+
+    if (!site) {
+      throw new Error("Select a saved site before requesting an informal quotation.");
+    }
+
+    const stakeholder = requireSiteStakeholder(site, input);
+    const stakeholderEmail = normalizeEmail(input.stakeholderEmail);
+    const items = normalizeInformalQuotationItems(input.items);
+    const priceType = input.priceType === "NON_GST" ? "NON_GST" : "GST_INCLUSIVE";
+    const paymentType = priceType === "NON_GST" ? "ADVANCE" : input.paymentType === "CREDIT" ? "CREDIT" : "ADVANCE";
+    const requestedCreditDays = Number(input.creditDays);
+    const oneWayDistanceKm = Number(input.oneWayDistanceKm);
+    const trafficPostCount = Number(input.trafficPostCount);
+
+    let normalizedCreditDays: number | null = null;
+    if (paymentType === "CREDIT") {
+      if (!Number.isFinite(requestedCreditDays) || requestedCreditDays <= 0) {
+        throw new Error("Credit period days are required for credit payment.");
+      }
+      normalizedCreditDays = requestedCreditDays;
+    }
+
+    if (!Number.isFinite(oneWayDistanceKm) || oneWayDistanceKm < 0) {
+      throw new Error("Enter a valid one-way distance.");
+    }
+
+    if (!Number.isFinite(trafficPostCount) || trafficPostCount < 0 || !Number.isInteger(trafficPostCount)) {
+      throw new Error("Enter a valid traffic post count.");
+    }
+
+    const duplicate = database.informalQuotationRequests.find(
+      (entry) =>
+        entry.status === "PENDING" &&
+        entry.createdBy === user.id &&
+        entry.leadId === lead.id &&
+        entry.siteId === site.id &&
+        entry.stakeholderEmail.toLowerCase() === stakeholderEmail &&
+        entry.items.map((item) => item.grade).join("|") === items.map((item) => item.grade).join("|"),
+    );
+
+    if (duplicate) {
+      throw new Error("A matching informal quotation request is already pending for this stakeholder.");
+    }
+
+    const request: InformalQuotationRequest = {
+      id: randomUUID(),
+      leadId: lead.id,
+      siteId: site.id,
+      plantId: site.plantId || lead.plantId || getUserPlantId(database, user.id),
+      customerName: lead.siteName,
+      siteName: site.siteName,
+      siteAddress: site.siteAddress,
+      stakeholderRole: stakeholder.role,
+      stakeholderLabel: stakeholder.label,
+      stakeholderName: stakeholder.name,
+      stakeholderPhone: stakeholder.phone,
+      stakeholderEmail,
+      priceType,
+      paymentType,
+      creditDays: normalizedCreditDays,
+      oneWayDistanceKm,
+      trafficPostCount,
+      items,
+      status: "PENDING",
+      decisionNote: null,
+      decidedBy: null,
+      decidedAt: null,
+      createdBy: user.id,
+      createdAt: nowIso(),
+    };
+
+    database.informalQuotationRequests.unshift(request);
+    logAudit(database, user, "InformalQuotationRequest", request.id, "CREATE", `Requested informal quotation for ${site.siteName}.`);
+    return request;
+  });
+}
+
+export async function decideInformalQuotationRequest(
+  user: User,
+  requestId: string,
+  status: InformalQuotationStatus,
+  decisionNote: string,
+) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const request = database.informalQuotationRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Informal quotation request not found.");
+    }
+
+    if (request.status !== "PENDING") {
+      throw new Error("This informal quotation request is already decided.");
+    }
+
+    if (status !== "APPROVED" && status !== "REJECTED") {
+      throw new Error("Choose whether to approve or reject this informal quotation.");
+    }
+
+    request.status = status;
+    request.decisionNote = decisionNote.trim() || (status === "APPROVED" ? "Approved by manager." : "Rejected by manager.");
+    request.decidedBy = user.id;
+    request.decidedAt = nowIso();
+    logAudit(database, user, "InformalQuotationRequest", request.id, status, request.decisionNote);
+    return request;
+  });
+}
+
 export interface CreateApprovalRequestInput {
   leadId: string;
   siteId: string | null;
@@ -1832,6 +2064,9 @@ export async function getAgentDashboardData(user: User): Promise<AgentDashboardD
   const approvals = database.approvalRequests
     .filter((entry) => entry.createdBy === user.id)
     .sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt));
+  const informalQuotationRequests = database.informalQuotationRequests
+    .filter((entry) => entry.createdBy === user.id)
+    .sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt));
   const reimbursementSummaries = computeReimbursementSummaries(database, user.id);
   const monthKey = toMonthKey(nowIso());
   const approvedQuantity = approvals.filter((entry) => entry.status === "APPROVED").reduce((sum, entry) => sum + entry.quantity, 0);
@@ -1846,6 +2081,7 @@ export async function getAgentDashboardData(user: User): Promise<AgentDashboardD
     leadSites: sortLeadSites(database.leadSites.filter((entry) => leadIds.includes(entry.leadId))),
     tasks: database.tasks.filter((entry) => entry.assignedTo === user.id).sort((left, right) => left.deadline.localeCompare(right.deadline)),
     approvals,
+    informalQuotationRequests,
     salesOrderRequests: database.salesOrderRequests
       .filter((entry) => entry.createdBy === user.id)
       .sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
@@ -1873,6 +2109,7 @@ export async function getManagerDashboardData(user: User): Promise<ManagerDashbo
     workdaySessions: database.workdaySessions,
     leads: sortLeads(database.leads),
     approvals: database.approvalRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
+    informalQuotationRequests: database.informalQuotationRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     salesOrderRequests: database.salesOrderRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     helpRequests: database.helpRequests,
     tasks: database.tasks,

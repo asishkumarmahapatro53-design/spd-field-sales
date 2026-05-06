@@ -310,6 +310,7 @@ function createSeedDatabase(): Database {
     leads: [],
     leadSites: [],
     approvalRequests: [],
+    informalQuotationRequests: [],
     salesOrderRequests: [],
     reimbursementClaims: [],
     tasks: [
@@ -561,6 +562,33 @@ function normalizeDatabase(rawDatabase: Database) {
     approval.quotedPrice ??= approval.items[0]?.quotedPrice ?? 0;
   });
 
+  database.informalQuotationRequests ??= [];
+  (database.informalQuotationRequests ?? []).forEach((request) => {
+    const linkedLead = database.leads.find((entry) => entry.id === request.leadId);
+    const linkedSite = database.leadSites.find((entry) => entry.id === request.siteId);
+    request.plantId ??= linkedSite?.plantId ?? linkedLead?.plantId ?? fallbackPlantId;
+    request.customerName ??= linkedLead?.siteName ?? request.siteName ?? "";
+    request.siteName ??= linkedSite?.siteName ?? linkedLead?.siteName ?? "";
+    request.siteAddress ??= linkedSite?.siteAddress ?? linkedLead?.siteAddress ?? "";
+    request.stakeholderLabel ??= request.stakeholderRole ?? "Stakeholder";
+    request.stakeholderPhone ??= "";
+    request.priceType ??= "GST_INCLUSIVE";
+    request.paymentType = request.priceType === "NON_GST" ? "ADVANCE" : request.paymentType ?? "ADVANCE";
+    request.creditDays = request.paymentType === "CREDIT" ? request.creditDays ?? null : null;
+    request.items = (request.items ?? []).map((item, index) => ({
+      id: item.id || (request.id ? `${request.id}-item-${index + 1}` : randomUUID()),
+      grade: item.grade ?? "",
+      quantityCum: Number(item.quantityCum ?? 0),
+      mixDesignType: item.mixDesignType ?? "NOMINAL_MIX",
+      mixRequirement: item.mixRequirement ?? (item.mixDesignType === "DESIGN_MIX" ? "" : "Nominal mix"),
+      pricePerCum: Number(item.pricePerCum ?? 0),
+    }));
+    request.status ??= "PENDING";
+    request.decisionNote ??= null;
+    request.decidedBy ??= null;
+    request.decidedAt ??= null;
+  });
+
   database.salesOrderRequests ??= [];
   (database.salesOrderRequests ?? []).forEach((request) => {
     const legacyStatus = request.status as string;
@@ -679,6 +707,7 @@ const COLLECTION_NAMES = [
   "leads",
   "leadSites",
   "approvalRequests",
+  "informalQuotationRequests",
   "salesOrderRequests",
   "reimbursementClaims",
   "tasks",

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { GpsCamera } from "@/components/agent/GpsCamera";
+import { InformalQuotationRequestCard } from "@/components/agent/InformalQuotationRequestCard";
 import { InstantPriceCard } from "@/components/agent/InstantPriceCard";
 import { SiteVisitFlowCard } from "@/components/agent/SiteVisitFlowCard";
 import {
@@ -11,9 +12,9 @@ import {
   ScheduleRequestCard as CommercialScheduleRequestCard,
 } from "@/components/agent/CommercialRequestCards";
 import { parseApiError, uploadDirectFile } from "@/components/agent/action-helpers";
-import type { AgentDashboardData, ApprovalRequest, Lead, LeadSite, OdometerReading, SalesOrderRequest } from "@/lib/types";
+import type { AgentDashboardData, ApprovalRequest, InformalQuotationRequest, Lead, LeadSite, OdometerReading, SalesOrderRequest } from "@/lib/types";
 
-type ActionSectionId = "odometer" | "site-visit" | "instant-price" | "approval" | "sales-order" | "schedule" | "help";
+type ActionSectionId = "odometer" | "site-visit" | "instant-price" | "informal-quotation" | "approval" | "sales-order" | "schedule" | "help";
 
 const ODOMETER_UPLOAD_TARGET_BYTES = 450 * 1024;
 const ODOMETER_UPLOAD_HARD_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -23,6 +24,7 @@ interface AgentActionPanelProps {
   leads: Lead[];
   leadSites: LeadSite[];
   approvals: ApprovalRequest[];
+  informalQuotationRequests: InformalQuotationRequest[];
   salesOrderRequests: SalesOrderRequest[];
 }
 
@@ -65,8 +67,9 @@ function ActionAccordionSection({
   );
 }
 
-export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrderRequests }: AgentActionPanelProps) {
+export function AgentActionPanel({ user, leads, leadSites, approvals, informalQuotationRequests, salesOrderRequests }: AgentActionPanelProps) {
   const [activeSection, setActiveSection] = useState<ActionSectionId>("odometer");
+  const pendingInformalQuotations = informalQuotationRequests.filter((quotation) => quotation.status === "PENDING").length;
   const pendingApprovals = approvals.filter((approval) => approval.status === "PENDING").length;
   const pendingOrders = salesOrderRequests.filter((request) => request.status === "PENDING_FINANCE").length;
   const readyForSchedule = salesOrderRequests.filter(
@@ -115,6 +118,21 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrder
 
       <ActionAccordionSection
         step="04"
+        title="Request Informal Quotation"
+        description="Prepare up to three grade-wise informal quotation lines for manager approval."
+        meta={`${pendingInformalQuotations} pending`}
+        isOpen={activeSection === "informal-quotation"}
+        onOpen={() => setActiveSection("informal-quotation")}
+      >
+        <InformalQuotationRequestCard
+          leads={leads}
+          leadSites={leadSites}
+          quotations={informalQuotationRequests}
+        />
+      </ActionAccordionSection>
+
+      <ActionAccordionSection
+        step="05"
         title="Raise Approval Request"
         description="Send negotiated price requests to the manager without leaving the dashboard."
         meta={`${pendingApprovals} pending`}
@@ -125,7 +143,7 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrder
       </ActionAccordionSection>
 
       <ActionAccordionSection
-        step="05"
+        step="06"
         title="Create Sales/SLA Order"
         description="Raise a finance-ready sales order only from manager-approved commercial terms."
         meta={`${pendingOrders} in finance queue`}
@@ -136,7 +154,7 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrder
       </ActionAccordionSection>
 
       <ActionAccordionSection
-        step="06"
+        step="07"
         title="Add In Schedule"
         description="Send finance-verified orders into the production schedule approval flow."
         meta={`${readyForSchedule} ready`}
@@ -147,7 +165,7 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, salesOrder
       </ActionAccordionSection>
 
       <ActionAccordionSection
-        step="07"
+        step="08"
         title="Help / Correction Request"
         description="Ask for support when a day has missing timings, readings, or visit updates."
         meta="Correction support"

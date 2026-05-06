@@ -98,6 +98,7 @@ const baseDatabase: Database = {
   leads: [],
   leadSites: [],
   approvalRequests: [],
+  informalQuotationRequests: [],
   salesOrderRequests: [],
   reimbursementClaims: [],
   tasks: [],
