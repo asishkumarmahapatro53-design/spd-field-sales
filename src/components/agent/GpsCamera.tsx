@@ -24,12 +24,14 @@ export function GpsCamera({
   compression,
   disabled,
 }: GpsCameraProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<CameraState>("idle");
   const [preview, setPreview] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const isBusy = disabled || state === "acquiring-gps" || state === "processing";
 
   useEffect(() => {
     return () => {
@@ -100,7 +102,7 @@ export function GpsCamera({
     setCapturedFile(null);
     setErrorMsg("");
     setState("idle");
-    inputRef.current?.click();
+    cameraInputRef.current?.click();
   }
 
   function clearPreview() {
@@ -124,31 +126,53 @@ export function GpsCamera({
   return (
     <div className="gps-camera">
       <input
-        ref={inputRef}
+        ref={cameraInputRef}
         type="file"
         accept="image/*"
         capture="environment"
         className="gps-camera-input"
         onChange={handleFileChange}
-        disabled={disabled || state === "acquiring-gps" || state === "processing"}
+        disabled={isBusy}
+      />
+
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
+        className="gps-camera-input"
+        onChange={handleFileChange}
+        disabled={isBusy}
       />
 
       {state !== "ready" && (
-        <button
-          className={`button gps-camera-btn ${state === "error" ? "button-danger" : ""}`}
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          disabled={disabled || state === "acquiring-gps" || state === "processing"}
-        >
-          {state === "acquiring-gps" || state === "processing" ? (
-            <span className="spinner" />
-          ) : (
+        <div className="gps-camera-actions">
+          <button
+            className={`button gps-camera-btn ${state === "error" ? "button-danger" : ""}`}
+            type="button"
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={isBusy}
+          >
+            {state === "acquiring-gps" || state === "processing" ? (
+              <span className="spinner" />
+            ) : (
+              <span className="camera-icon" aria-hidden="true">
+                [CAM]
+              </span>
+            )}
+            {stateLabels[state]}
+          </button>
+          <button
+            className="button button-secondary gps-camera-btn"
+            type="button"
+            onClick={() => galleryInputRef.current?.click()}
+            disabled={isBusy}
+          >
             <span className="camera-icon" aria-hidden="true">
-              [CAM]
+              [IMG]
             </span>
-          )}
-          {stateLabels[state]}
-        </button>
+            Upload from Gallery
+          </button>
+        </div>
       )}
 
       {errorMsg ? <p className="error-text">{errorMsg}</p> : null}

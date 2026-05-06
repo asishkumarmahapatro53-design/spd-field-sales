@@ -540,6 +540,54 @@ function getOrCreateReadingSession(
   return session;
 }
 
+function getOrCreateSiteVisitSession(
+  database: Database,
+  user: User,
+  dateKey: string,
+  visitedAt: string,
+  latLng: LatLng | null,
+) {
+  const todayKey = toDateKey(nowIso());
+  let session: WorkdaySession | null =
+    dateKey === todayKey ? getOpenSession(database, user.id, dateKey) ?? null : findSessionForDate(database, user.id, dateKey);
+
+  if (!session && dateKey === todayKey) {
+    throw new Error("Start the workday before creating site visits.");
+  }
+
+  if (!session) {
+    session = {
+      id: randomUUID(),
+      userId: user.id,
+      plantId: getUserPlantId(database, user.id),
+      date: dateKey,
+      loginAt: visitedAt,
+      logoutAt: visitedAt,
+      loginLatLng: latLng,
+      logoutLatLng: latLng,
+      status: "CLOSED",
+    };
+    database.workdaySessions.push(session);
+    logAudit(database, user, "WorkdaySession", session.id, "PAST_UPLOAD", `Created workday session from site visit photo timestamp ${dateKey}.`);
+    return session;
+  }
+
+  if (compareIsoAsc(visitedAt, session.loginAt) < 0) {
+    session.loginAt = visitedAt;
+    session.loginLatLng = latLng ?? session.loginLatLng;
+  }
+
+  if (dateKey !== todayKey) {
+    if (!session.logoutAt || compareIsoAsc(session.logoutAt, visitedAt) < 0) {
+      session.logoutAt = visitedAt;
+      session.logoutLatLng = latLng ?? session.logoutLatLng;
+    }
+    session.status = "CLOSED";
+  }
+
+  return session;
+}
+
 type OdometerReadingInput = {
   type: ReadingType;
   latLng: LatLng | null;
@@ -820,6 +868,11 @@ function syncLeadSummaryFromSite(
   site: LeadSite,
   visit: Pick<SiteVisit, "visitedAt" | "leadStage" | "nextFollowUpAt" | "score" | "futureScope">,
 ) {
+  const shouldRefreshSummary = !lead.lastVisitedAt || compareIsoAsc(lead.lastVisitedAt, visit.visitedAt) <= 0;
+  if (!shouldRefreshSummary) {
+    return;
+  }
+
   const contactSummary = getLeadContactSummary(site.stakeholders);
 
   lead.siteName = site.siteName;
@@ -936,11 +989,14 @@ export async function createSiteVisit(
   }
 
   return updateDatabase((database) => {
-    const session = getOpenSession(database, user.id);
-
-    if (!session) {
-      throw new Error("Start the workday before creating site visits.");
-    }
+    const visitDateKey = toDateKey(visitedAt);
+    const session = getOrCreateSiteVisitSession(
+      database,
+      user,
+      visitDateKey,
+      visitedAt,
+      input.latLng ?? detectedLatLng ?? null,
+    );
 
     const leadId = input.leadId?.trim() || randomUUID();
     let lead = database.leads.find((entry) => entry.id === leadId);
@@ -949,7 +1005,7 @@ export async function createSiteVisit(
       lead = {
         id: leadId,
         agentId: user.id,
-        plantId: getUserPlantId(database, user.id),
+        plantId: session.plantId,
         siteName: input.siteName,
         siteAddress: resolvedSiteAddress,
         score: resolvedScore,
@@ -1009,8 +1065,10 @@ export async function createSiteVisit(
       site.currentConcreteGrade = input.concreteGrade;
       site.currentQuantityCum = input.quantityCum;
       site.score = resolvedScore;
-      site.lastVisitedAt = visitedAt;
-      site.updatedAt = visitedAt;
+      if (compareIsoAsc(site.lastVisitedAt, visitedAt) < 0) {
+        site.lastVisitedAt = visitedAt;
+      }
+      site.updatedAt = nowIso();
 
       if (resolvedCurrentSupplier) {
         site.currentSupplier = resolvedCurrentSupplier;

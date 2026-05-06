@@ -1943,6 +1943,12 @@ th {
   gap: 8px;
 }
 
+.gps-camera-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .camera-icon {
   font-size: 1.1em;
 }
