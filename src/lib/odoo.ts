@@ -221,7 +221,6 @@ export async function checkOdooConnection(config = getOdooConfig()): Promise<Odo
       [[uid]],
       {
         fields: ["name", "login", "company_id"],
-        limit: 1,
       },
     ],
   );
