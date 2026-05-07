@@ -24,6 +24,7 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
   const pendingFinance = requests.filter((entry) => entry.status === "PENDING_FINANCE");
   const financeVerified = requests.filter((entry) => entry.status === "FINANCE_VERIFIED");
   const ledgerReady = requests.filter((entry) => entry.status === "SCHEDULE_APPROVED");
+  const pendingLedger = pendingFinance.filter((entry) => entry.gstin || entry.gstCertificateUrl);
 
   async function review(id: string, status: "FINANCE_VERIFIED" | "FINANCE_REJECTED", note: string) {
     setBusyId(id);
@@ -57,6 +58,10 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
       </div>
 
       <div className="accounting-metric-row compact">
+        <div className="summary-cell">
+          <span className="summary-label">Pending ledger</span>
+          <strong>{pendingLedger.length}</strong>
+        </div>
         <div className="summary-cell">
           <span className="summary-label">Pending finance</span>
           <strong>{pendingFinance.length}</strong>
@@ -99,6 +104,23 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
                 <span>{request.pdcDocumentUrl ? "PDC uploaded" : "PDC not uploaded"}</span>
                 <span>{request.paymentReceivedConfirmed ? "Payment confirmed" : "Payment not confirmed"}</span>
               </div>
+              <div className="summary-card">
+                <div className="panel-header">
+                  <div>
+                    <h4>Pending ledger details</h4>
+                    <p className="panel-copy">{request.gstin ? `GSTIN ${request.gstin}` : "No GSTIN captured; batcher invoice mode will stay locked to challan-only."}</p>
+                  </div>
+                  <span className={`status-badge status-${request.gstVerificationStatus.toLowerCase()}`}>
+                    {request.gstVerificationStatus.replaceAll("_", " ").toLowerCase()}
+                  </span>
+                </div>
+                <div className="row-meta">
+                  <span>PAN {request.gstPan ?? "not detected"}</span>
+                  <span>{request.gstLegalName ?? "Legal name not captured"}</span>
+                  <span>Ship to site address</span>
+                </div>
+                <p>{request.gstBillingAddress ?? "Billing address not captured"}</p>
+              </div>
               <div className="button-row">
                 {request.poDocumentUrl ? (
                   <a className="button-ghost" href={request.poDocumentUrl} target="_blank" rel="noreferrer">
@@ -108,6 +130,11 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
                 {request.pdcDocumentUrl ? (
                   <a className="button-ghost" href={request.pdcDocumentUrl} target="_blank" rel="noreferrer">
                     View PDC
+                  </a>
+                ) : null}
+                {request.gstCertificateUrl ? (
+                  <a className="button-ghost" href={request.gstCertificateUrl} target="_blank" rel="noreferrer">
+                    View GST certificate
                   </a>
                 ) : null}
                 <button

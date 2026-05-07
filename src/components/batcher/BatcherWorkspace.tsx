@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { DispatchRecord, FleetVehicle, MixDesign, SalesOrderRequest } from "@/lib/types";
+import { canUseInvoiceDocumentMode, getDocumentModeLabel } from "@/lib/legal-workflow";
+import type { DispatchDocumentMode, DispatchRecord, FleetVehicle, MixDesign, SalesOrderRequest } from "@/lib/types";
 
 interface BatcherWorkspaceProps {
   plantName: string;
@@ -16,18 +17,24 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
   const [selectedOrderId, setSelectedOrderId] = useState(activeOrders[0]?.id ?? "");
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [dispatchQty, setDispatchQty] = useState<number | "">("");
+  const [documentMode, setDocumentMode] = useState<DispatchDocumentMode>("CHALLAN_ONLY");
+  const [driverName, setDriverName] = useState("");
+  const [driverPhone, setDriverPhone] = useState("");
   
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const [returnDispatchId, setReturnDispatchId] = useState("");
-  const [returnQty, setReturnQty] = useState<number | "">("");
-  const [processingReturn, setProcessingReturn] = useState(false);
-
   const selectedOrder = activeOrders.find((o) => o.id === selectedOrderId);
   const selectedVehicle = fleetVehicles.find((v) => v.id === selectedVehicleId);
   const idleVehicles = fleetVehicles.filter((v) => v.status === "IDLE");
+  const invoiceModeAllowed = selectedOrder ? canUseInvoiceDocumentMode(selectedOrder) : false;
+
+  useEffect(() => {
+    if (!invoiceModeAllowed) {
+      setDocumentMode("CHALLAN_ONLY");
+    }
+  }, [invoiceModeAllowed]);
 
   // Determine active mix design for the selected order
   const activeMixDesign = selectedOrder 
@@ -68,6 +75,9 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
           orderId: selectedOrder.id,
           vehicleId: selectedVehicle.id,
           dispatchedQuantityCum: Number(dispatchQty),
+          documentMode,
+          driverName,
+          driverPhone,
         }),
       });
 
@@ -79,6 +89,9 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
       setSuccess(`Dispatched ${dispatchQty} CUM to ${selectedOrder.siteName} using truck ${selectedVehicle.vehicleCode}.`);
       setDispatchQty("");
       setSelectedVehicleId("");
+      setDocumentMode("CHALLAN_ONLY");
+      setDriverName("");
+      setDriverPhone("");
       
       // We rely on router.refresh() in the page to fetch fresh data
       setTimeout(() => {
@@ -91,64 +104,39 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
     }
   }
 
-  async function handleReturnLoad() {
-    setError("");
-    setSuccess("");
-
-    if (!returnDispatchId) {
-      setError("Please select a dispatch record to return.");
-      return;
-    }
-    if (!returnQty || returnQty <= 0) {
-      setError("Please enter a valid return quantity.");
-      return;
-    }
-
-    const record = dispatchRecords.find((d) => d.id === returnDispatchId);
-    if (!record) return;
-    if (returnQty > record.dispatchedQuantityCum) {
-      setError("Return quantity cannot be more than the dispatched quantity.");
-      return;
-    }
-
-    setProcessingReturn(true);
-    try {
-      const res = await fetch(`/api/dispatch/${returnDispatchId}/return`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ returnedQuantityCum: Number(returnQty) }),
-      });
-
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({ error: "Return failed" }));
-        throw new Error(d.error ?? "Return failed");
-      }
-
-      setSuccess(`Successfully logged return load of ${returnQty} CUM for truck ${record.vehicleCode}.`);
-      setReturnDispatchId("");
-      setReturnQty("");
-      
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
-    } catch (e: any) {
-      setError(e.message ?? "An error occurred.");
-    } finally {
-      setProcessingReturn(false);
-    }
-  }
-
   // Pre-fill suggested quantity when a truck is selected
   function onVehicleSelect(id: string) {
     setSelectedVehicleId(id);
     const v = fleetVehicles.find((vh) => vh.id === id);
     if (v && selectedOrder) {
       setDispatchQty(Math.min(v.capacityCum, selectedOrder.remainingQuantity));
+      setDriverName(v.driverName || "");
     }
   }
 
-  // Filter dispatch records that can have a return load (must be DISPATCHED status)
-  const activeDispatches = dispatchRecords.filter((d) => d.status === "DISPATCHED");
+  async function markSiteStatus(dispatchId: string, status: "SITE_ACCEPTED" | "SITE_REJECTED") {
+    setError("");
+    setSuccess("");
+    try {
+      const res = await fetch(`/api/dispatch/${dispatchId}/site-status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: "Site status update failed" }));
+        throw new Error(d.error ?? "Site status update failed");
+      }
+
+      setSuccess(status === "SITE_ACCEPTED" ? "Challan marked accepted and billable." : "Challan rejected and returned to review.");
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+    } catch (e: any) {
+      setError(e.message ?? "An error occurred.");
+    }
+  }
 
   return (
     <div className="batcher-workspace">
@@ -216,6 +204,41 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
           </div>
         </div>
 
+        <div className="three-grid mt-16">
+          <div className="field">
+            <label>Driver name</label>
+            <input className="input" value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Driver name" />
+          </div>
+          <div className="field">
+            <label>Driver phone</label>
+            <input className="input" value={driverPhone} onChange={(e) => setDriverPhone(e.target.value)} placeholder="Driver mobile" />
+          </div>
+          <div className="field">
+            <label>Document mode</label>
+            <select
+              className="select"
+              value={documentMode}
+              onChange={(e) => setDocumentMode(e.target.value as DispatchDocumentMode)}
+              disabled={!invoiceModeAllowed}
+            >
+              <option value="CHALLAN_ONLY">Challan only</option>
+              {invoiceModeAllowed ? <option value="CHALLAN_AND_INVOICE">Challan + invoice</option> : null}
+              {invoiceModeAllowed ? <option value="CHALLAN_AND_GST_E_INVOICE">Challan + GST invoice/e-invoice</option> : null}
+            </select>
+            <small style={{ color: "var(--muted)", marginTop: "4px", display: "block" }}>
+              {invoiceModeAllowed ? "GSTIN verified: invoice modes are unlocked." : "No verified GSTIN: challan only is enforced."}
+            </small>
+          </div>
+        </div>
+
+        {selectedOrder ? (
+          <div className="row-meta mt-16">
+            <span>GSTIN {selectedOrder.gstin ?? "not provided"}</span>
+            <span>Actual casting {selectedOrder.actualCastingType.toLowerCase()}</span>
+            <span>Pump {selectedOrder.pumpDispatchStatus.replaceAll("_", " ").toLowerCase()}</span>
+          </div>
+        ) : null}
+
         {selectedOrder && !activeMixDesign && (
           <div className="note-box mt-16" style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" }}>
             <strong>Missing Mix Design:</strong> There is no active Mix Design for grade <strong>{selectedOrder.grade}</strong>. 
@@ -234,57 +257,6 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
         </div>
       </div>
 
-      {/* Return Load Section */}
-      <div className="card mt-24">
-        <div className="panel-header">
-          <div>
-            <h3>Log Return Load</h3>
-            <p className="panel-copy">If a truck returns with leftover concrete, log it here to adjust the material consumption audit.</p>
-          </div>
-        </div>
-
-        <div className="form-grid mt-16">
-          <div className="field">
-            <label>Select Active Dispatch</label>
-            <select
-              className="select"
-              value={returnDispatchId}
-              onChange={(e) => setReturnDispatchId(e.target.value)}
-            >
-              <option value="">-- Choose Dispatch --</option>
-              {activeDispatches.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.vehicleCode} | Dispatched: {d.dispatchedQuantityCum} CUM | {toIndiaTimeLabel(d.dispatchedAt)}
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          <div className="field">
-            <label>Returned Quantity (CUM)</label>
-            <input
-              type="number"
-              className="input"
-              value={returnQty}
-              onChange={(e) => setReturnQty(e.target.value ? Number(e.target.value) : "")}
-              placeholder="e.g. 1.5"
-              step="0.1"
-              min="0"
-            />
-          </div>
-        </div>
-
-        <div className="button-row mt-16">
-          <button 
-            className="button button-secondary" 
-            onClick={handleReturnLoad}
-            disabled={processingReturn || !returnDispatchId || !returnQty}
-          >
-            {processingReturn ? "Logging..." : "Log Return Load"}
-          </button>
-        </div>
-      </div>
-
       {/* Recent Dispatches Table */}
       <div className="card mt-24">
         <div className="panel-header">
@@ -297,18 +269,22 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
             <thead>
               <tr>
                 <th>Time</th>
+                <th>Challan</th>
                 <th>Truck</th>
                 <th>Order Grade</th>
                 <th>Dispatch (CUM)</th>
+                <th>Doc Mode</th>
+                <th>Casting</th>
                 <th>Return (CUM)</th>
                 <th>Final (CUM)</th>
                 <th>Status</th>
+                <th>Site</th>
               </tr>
             </thead>
             <tbody>
               {dispatchRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: "center", padding: "20px", color: "var(--muted)" }}>
+                  <td colSpan={11} style={{ textAlign: "center", padding: "20px", color: "var(--muted)" }}>
                     No dispatches recorded today.
                   </td>
                 </tr>
@@ -318,15 +294,32 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                   return (
                     <tr key={d.id}>
                       <td>{toIndiaTimeLabel(d.dispatchedAt)}</td>
+                      <td>{d.challanNumber}</td>
                       <td><strong>{d.vehicleCode}</strong></td>
                       <td>{order?.grade || "N/A"}</td>
                       <td>{d.dispatchedQuantityCum}</td>
+                      <td>{getDocumentModeLabel(d.documentMode)}</td>
+                      <td>{d.actualCastingType.toLowerCase()}</td>
                       <td>{d.returnedQuantityCum > 0 ? <span style={{color: "#b91c1c"}}>{d.returnedQuantityCum}</span> : "-"}</td>
                       <td><strong>{d.finalSuppliedCum}</strong></td>
                       <td>
                         <span className={`status-badge ${d.status === "DISPATCHED" ? "status-pending" : "status-paid"}`}>
                           {d.status}
                         </span>
+                      </td>
+                      <td>
+                        {d.status === "DISPATCHED" ? (
+                          <div className="button-row">
+                            <button className="button-ghost" type="button" onClick={() => void markSiteStatus(d.id, "SITE_ACCEPTED")}>
+                              Accepted
+                            </button>
+                            <button className="button-danger" type="button" onClick={() => void markSiteStatus(d.id, "SITE_REJECTED")}>
+                              Rejected
+                            </button>
+                          </div>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                     </tr>
                   );

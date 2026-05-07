@@ -18,8 +18,14 @@ export async function POST(request: Request) {
     const notes = `${formData.get("notes") ?? ""}`.trim();
     const pumpRequired = `${formData.get("pumpRequired") ?? ""}` === "true";
     const paymentReceivedConfirmed = `${formData.get("paymentReceivedConfirmed") ?? ""}` === "true";
+    const gstin = `${formData.get("gstin") ?? ""}`.trim();
+    const gstLegalName = `${formData.get("gstLegalName") ?? ""}`.trim();
+    const gstBillingAddress = `${formData.get("gstBillingAddress") ?? ""}`.trim();
+    const agentGstConfirmed = `${formData.get("agentGstConfirmed") ?? ""}` === "true";
+    const plannedCastingType = `${formData.get("plannedCastingType") ?? ""}`.trim();
     const poFile = formData.get("poDocument");
     const pdcFile = formData.get("pdcDocument");
+    const gstCertificateFile = formData.get("gstCertificate");
 
     if (!leadId) {
       throw new ApiError(400, "Lead is required.");
@@ -49,6 +55,8 @@ export async function POST(request: Request) {
       poFile instanceof File && poFile.size > 0 ? (await saveUploadedFile(poFile)).photoUrl : null;
     const pdcDocumentUrl =
       pdcFile instanceof File && pdcFile.size > 0 ? (await saveUploadedFile(pdcFile)).photoUrl : null;
+    const gstCertificateUrl =
+      gstCertificateFile instanceof File && gstCertificateFile.size > 0 ? (await saveUploadedFile(gstCertificateFile)).photoUrl : null;
 
     const orderRequest = await createSalesOrderRequest(user, {
       leadId,
@@ -65,6 +73,12 @@ export async function POST(request: Request) {
       paymentReceivedConfirmed,
       poDocumentUrl,
       pdcDocumentUrl,
+      gstin,
+      gstLegalName,
+      gstBillingAddress,
+      gstCertificateUrl,
+      agentGstConfirmed,
+      plannedCastingType,
     });
 
     return jsonOk({ orderRequest }, 201);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getApprovalItems, normalizePaymentTerms } from "@/lib/commercial";
 import { getFirebaseFirestore, hasFirebaseCredentialShape } from "@/lib/firebase-admin";
+import { extractPanFromGstin, getActualCastingType, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
 import { hashPassword } from "@/lib/password";
 import type { Database, Lead, LeadSite, SiteVisit, StakeholderContact, User } from "@/lib/types";
 import { nowIso, toDateKey } from "@/lib/date";
@@ -658,6 +659,26 @@ function normalizeDatabase(rawDatabase: Database) {
     request.receiverPhone ??= "";
     request.poDocumentUrl ??= null;
     request.pdcDocumentUrl ??= null;
+    request.gstin = request.gstin ? normalizeGstin(request.gstin) : null;
+    request.gstPan ??= request.gstin ? extractPanFromGstin(request.gstin) : null;
+    request.gstLegalName ??= null;
+    request.gstBillingAddress ??= null;
+    request.gstCertificateUrl ??= null;
+    request.gstVerificationStatus ??= request.gstin || request.gstCertificateUrl ? "PENDING_ACCOUNTS" : "NOT_PROVIDED";
+    request.gstVerifiedBy ??= null;
+    request.gstVerifiedAt ??= null;
+    request.gstVerificationNote ??= null;
+    request.agentGstConfirmedAt ??= null;
+    request.shippingAddress ??= request.siteAddress ?? linkedSite?.siteAddress ?? "";
+    request.plannedCastingType ??= normalizeCastingType(linkedApproval?.castingType ?? (request.pumpRequired ? "Pump" : "Dump"));
+    request.pumpDispatchStatus ??= "NOT_DISPATCHED";
+    request.actualCastingType ??= getActualCastingType(request.pumpDispatchStatus);
+    request.pumpDispatchedBy ??= null;
+    request.pumpDispatchedAt ??= null;
+    request.pumpVehicleNumber ??= null;
+    request.pumpOperatorName ??= null;
+    request.pumpOperatorPhone ??= null;
+    request.pumpDispatchNote ??= null;
     request.paymentReceivedConfirmed ??= request.paymentType === "NORMAL";
     request.financeReviewedBy ??= null;
     request.financeReviewedAt ??= null;
@@ -687,6 +708,18 @@ function normalizeDatabase(rawDatabase: Database) {
   // Normalize new RMC collections (ensure they exist)
   database.mixDesigns ??= [];
   database.dispatchRecords ??= [];
+  database.dispatchRecords.forEach((record) => {
+    const linkedOrder = database.salesOrderRequests.find((entry) => entry.id === record.orderId);
+    record.driverPhone ??= "";
+    record.challanNumber ??= `CH/${record.id.slice(0, 8).toUpperCase()}`;
+    record.documentMode ??= "CHALLAN_ONLY";
+    record.invoiceStatus ??= record.documentMode === "CHALLAN_ONLY" ? "NOT_REQUESTED" : "REQUESTED";
+    record.invoiceNumber ??= null;
+    record.eInvoiceIrn ??= null;
+    record.actualCastingType ??= linkedOrder?.actualCastingType ?? "DUMP";
+    record.gstin ??= linkedOrder?.gstin ?? null;
+    record.pumpDispatchStatus ??= linkedOrder?.pumpDispatchStatus ?? "NOT_DISPATCHED";
+  });
   database.commissionVouchers ??= [];
 
   database.reimbursementClaims ??= [];

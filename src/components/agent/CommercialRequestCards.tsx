@@ -13,6 +13,7 @@ import {
   requiresPdcUpload,
   requiresPoUpload,
 } from "@/lib/commercial";
+import { extractPanFromGstin, isValidGstin, normalizeCastingType } from "@/lib/legal-workflow";
 import type { ApprovalRequest, ApprovalRequestItem, Lead, LeadSite, PaymentTerms, PaymentType, SalesOrderRequest } from "@/lib/types";
 import { parseApiError } from "@/components/agent/action-helpers";
 
@@ -410,6 +411,11 @@ export function SalesOrderRequestCard({
   const [quantity, setQuantity] = useState("");
   const [requiredDate, setRequiredDate] = useState("");
   const [pumpRequired, setPumpRequired] = useState(false);
+  const [plannedCastingType, setPlannedCastingType] = useState<"PUMP" | "DUMP">("DUMP");
+  const [gstin, setGstin] = useState("");
+  const [gstLegalName, setGstLegalName] = useState("");
+  const [gstBillingAddress, setGstBillingAddress] = useState("");
+  const [agentGstConfirmed, setAgentGstConfirmed] = useState(false);
   const normalizedPaymentTerms = selectedApproval
     ? normalizePaymentTerms(selectedApproval.paymentType, selectedApproval.paymentTerms)
     : "ADVANCE";
@@ -436,6 +442,9 @@ export function SalesOrderRequestCard({
     setQuantity((current) => current || `${selectedApproval.quantity}`);
     // Sync the required date whenever the selected approval changes
     setRequiredDate(toDateInputValue(selectedApproval.requiredDate));
+    const nextCastingType = normalizeCastingType(selectedApproval.castingType);
+    setPlannedCastingType(nextCastingType);
+    setPumpRequired(nextCastingType === "PUMP");
   }, [approvalItems, selectedApproval]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -450,6 +459,8 @@ export function SalesOrderRequestCard({
     formData.set("approvalRequestId", selectedApproval?.id ?? "");
     formData.set("approvalItemId", approvalItemId);
     formData.set("pumpRequired", pumpRequired ? "true" : "false");
+    formData.set("plannedCastingType", plannedCastingType);
+    formData.set("agentGstConfirmed", agentGstConfirmed ? "true" : "false");
 
     const response = await fetch("/api/sales-order-requests", {
       method: "POST",
@@ -466,9 +477,19 @@ export function SalesOrderRequestCard({
     setFeedback("Sales/SLA order request created and moved to finance review.");
     form.reset();
     setQuantity(selectedApproval ? `${selectedApproval.quantity}` : "");
-    setPumpRequired(false);
+    const resetCastingType = selectedApproval ? normalizeCastingType(selectedApproval.castingType) : "DUMP";
+    setPlannedCastingType(resetCastingType);
+    setPumpRequired(resetCastingType === "PUMP");
+    setGstin("");
+    setGstLegalName("");
+    setGstBillingAddress("");
+    setAgentGstConfirmed(false);
     startTransition(() => router.refresh());
   }
+
+  const normalizedGstin = gstin.trim().toUpperCase().replace(/\s+/g, "");
+  const gstPan = normalizedGstin ? extractPanFromGstin(normalizedGstin) : null;
+  const hasValidGstin = normalizedGstin ? isValidGstin(normalizedGstin) : false;
 
   return (
     <>
@@ -512,6 +533,78 @@ export function SalesOrderRequestCard({
               <option value="URGENT">Urgent</option>
             </select>
           </div>
+        </div>
+
+        <div className="summary-card">
+          <div className="panel-header">
+            <div>
+              <h4>Customer legal details</h4>
+              <p className="panel-copy">GSTIN enables invoice mode later. If it is absent, batcher dispatch will stay challan-only.</p>
+            </div>
+            <span className={`status-badge ${hasValidGstin ? "status-approved" : "status-pending"}`}>
+              {hasValidGstin ? "GSTIN format ok" : "Challan fallback"}
+            </span>
+          </div>
+          <div className="three-grid">
+            <div className="field">
+              <label htmlFor="salesGstin">GSTIN</label>
+              <input
+                id="salesGstin"
+                name="gstin"
+                value={gstin}
+                onChange={(event) => {
+                  setGstin(event.target.value.toUpperCase());
+                  setAgentGstConfirmed(false);
+                }}
+                placeholder="22AAAAA0000A1Z5"
+                maxLength={15}
+              />
+              <span className="hint">{gstPan ? `PAN auto-detected: ${gstPan}` : "Leave blank only when this dispatch must remain challan-only."}</span>
+            </div>
+            <div className="field">
+              <label htmlFor="salesGstLegalName">Legal business name</label>
+              <input
+                id="salesGstLegalName"
+                name="gstLegalName"
+                value={gstLegalName}
+                onChange={(event) => {
+                  setGstLegalName(event.target.value);
+                  setAgentGstConfirmed(false);
+                }}
+                required={Boolean(normalizedGstin)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="salesGstCertificate">GST certificate fallback</label>
+              <input id="salesGstCertificate" name="gstCertificate" type="file" accept=".pdf,.jpg,.jpeg,.png" />
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="salesGstBillingAddress">Billing address</label>
+            <textarea
+              id="salesGstBillingAddress"
+              name="gstBillingAddress"
+              value={gstBillingAddress}
+              onChange={(event) => {
+                setGstBillingAddress(event.target.value);
+                setAgentGstConfirmed(false);
+              }}
+              placeholder="Registered billing address from GST verification"
+              required={Boolean(normalizedGstin)}
+            />
+          </div>
+          {normalizedGstin ? (
+            <label className="row-meta">
+              <input
+                name="agentGstConfirmedCheckbox"
+                type="checkbox"
+                checked={agentGstConfirmed}
+                onChange={(event) => setAgentGstConfirmed(event.target.checked)}
+                required
+              />
+              I verified the GST legal name and billing address before submitting
+            </label>
+          ) : null}
         </div>
 
         {selectedApproval ? (
@@ -573,9 +666,27 @@ export function SalesOrderRequestCard({
             <input id="salesReceiverPhone" name="receiverPhone" required />
           </div>
           <label className="row-meta align-end">
-            <input checked={pumpRequired} onChange={(event) => setPumpRequired(event.target.checked)} name="pumpRequiredCheckbox" type="checkbox" />
-            Pump required
+            <input checked={pumpRequired} readOnly name="pumpRequiredCheckbox" type="checkbox" />
+            Planned pump
           </label>
+        </div>
+
+        <div className="field">
+          <label htmlFor="salesPlannedCastingType">Planned casting type</label>
+          <select
+            id="salesPlannedCastingType"
+            name="plannedCastingType"
+            value={plannedCastingType}
+            onChange={(event) => {
+              const nextValue = event.target.value === "PUMP" ? "PUMP" : "DUMP";
+              setPlannedCastingType(nextValue);
+              setPumpRequired(nextValue === "PUMP");
+            }}
+          >
+            <option value="PUMP">Pump</option>
+            <option value="DUMP">Dump</option>
+          </select>
+          <span className="hint">Final challan/invoice casting will follow production manager pump dispatch confirmation.</span>
         </div>
 
         <div className="field">

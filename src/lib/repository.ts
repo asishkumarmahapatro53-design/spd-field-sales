@@ -13,6 +13,7 @@ import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
 import { readDatabase, updateDatabase } from "@/lib/db";
 import { sendGmail } from "@/lib/gmail-smtp";
 import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
+import { extractPanFromGstin, isValidGstin, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
 import { ocrService } from "@/lib/ocr";
 import { getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import { saveGeneratedBuffer } from "@/lib/storage";
@@ -1803,6 +1804,12 @@ export interface CreateSalesOrderRequestInput {
   paymentReceivedConfirmed: boolean;
   poDocumentUrl: string | null;
   pdcDocumentUrl: string | null;
+  gstin: string | null;
+  gstLegalName: string | null;
+  gstBillingAddress: string | null;
+  gstCertificateUrl: string | null;
+  agentGstConfirmed: boolean;
+  plannedCastingType: string;
 }
 
 export async function createApprovalRequest(
@@ -1903,6 +1910,13 @@ export async function createSalesOrderRequest(
     const approvalItem = getApprovalItemById(approval, input.approvalItemId);
     const quantity = Number(input.quantity);
     const requiredDate = new Date(input.requiredDate);
+    const gstin = normalizeGstin(`${input.gstin ?? ""}`);
+    const gstPan = gstin ? extractPanFromGstin(gstin) : null;
+    const gstLegalName = `${input.gstLegalName ?? ""}`.trim();
+    const gstBillingAddress = `${input.gstBillingAddress ?? ""}`.trim();
+    const plannedCastingType = input.plannedCastingType
+      ? normalizeCastingType(input.plannedCastingType)
+      : normalizeCastingType(approval.castingType);
 
     if (!site) {
       throw new Error("The approved site could not be found.");
@@ -1933,6 +1947,14 @@ export async function createSalesOrderRequest(
       throw new Error("Upload the PDC document for this payment term.");
     }
 
+    if (gstin && !isValidGstin(gstin)) {
+      throw new Error("Enter a valid GSTIN or leave it blank for challan-only dispatch.");
+    }
+
+    if (gstin && (!gstLegalName || !gstBillingAddress || !input.agentGstConfirmed)) {
+      throw new Error("Confirm GST legal name and billing address before submitting a GST sales order.");
+    }
+
     const amount = computeSalesOrderAmount(quantity, approvalItem.quotedPrice, input.pumpRequired);
     const orderRequest: SalesOrderRequest = {
       id: randomUUID(),
@@ -1959,6 +1981,26 @@ export async function createSalesOrderRequest(
       receiverPhone: input.receiverPhone.trim(),
       poDocumentUrl: input.poDocumentUrl,
       pdcDocumentUrl: input.pdcDocumentUrl,
+      gstin: gstin || null,
+      gstPan,
+      gstLegalName: gstLegalName || null,
+      gstBillingAddress: gstBillingAddress || null,
+      gstCertificateUrl: input.gstCertificateUrl,
+      gstVerificationStatus: gstin || input.gstCertificateUrl ? "PENDING_ACCOUNTS" : "NOT_PROVIDED",
+      gstVerifiedBy: null,
+      gstVerifiedAt: null,
+      gstVerificationNote: null,
+      agentGstConfirmedAt: gstin && input.agentGstConfirmed ? nowIso() : null,
+      shippingAddress: site.siteAddress,
+      plannedCastingType,
+      actualCastingType: "DUMP",
+      pumpDispatchStatus: "NOT_DISPATCHED",
+      pumpDispatchedBy: null,
+      pumpDispatchedAt: null,
+      pumpVehicleNumber: null,
+      pumpOperatorName: null,
+      pumpOperatorPhone: null,
+      pumpDispatchNote: null,
       paymentReceivedConfirmed: input.paymentReceivedConfirmed,
       requiredDate: requiredDate.toISOString(),
       pumpRequired: input.pumpRequired,
@@ -2015,6 +2057,16 @@ export async function reviewSalesOrderRequestByAccounting(
     request.financeReviewedBy = user.id;
     request.financeReviewedAt = nowIso();
     request.financeNote = note;
+    if (status === "FINANCE_VERIFIED" && (request.gstin || request.gstCertificateUrl)) {
+      request.gstVerificationStatus = "VERIFIED";
+      request.gstVerifiedBy = user.id;
+      request.gstVerifiedAt = request.financeReviewedAt;
+      request.gstVerificationNote = note || "Accounts verified the customer ledger and GST/legal details.";
+    }
+    if (status === "FINANCE_REJECTED" && request.gstVerificationStatus === "PENDING_ACCOUNTS") {
+      request.gstVerificationStatus = "REJECTED";
+      request.gstVerificationNote = note || "Accounts rejected the customer legal details.";
+    }
     logAudit(
       database,
       user,
@@ -2117,6 +2169,56 @@ export async function decideSalesOrderSchedule(
       request.id,
       status,
       note || "Production schedule decision updated.",
+    );
+
+    return request;
+  });
+}
+
+export async function updateSalesOrderPumpDispatch(
+  user: User,
+  requestId: string,
+  input: {
+    pumpDispatched: boolean;
+    pumpVehicleNumber: string;
+    pumpOperatorName: string;
+    pumpOperatorPhone: string;
+    note: string;
+  },
+) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    if (request.status !== "SCHEDULE_APPROVED") {
+      throw new Error("Pump dispatch can be confirmed only after production schedule approval.");
+    }
+
+    const pumpDispatchStatus = input.pumpDispatched ? "DISPATCHED" : "NOT_DISPATCHED";
+    const actualCastingType = pumpDispatchStatus === "DISPATCHED" ? "PUMP" : "DUMP";
+    request.pumpDispatchStatus = pumpDispatchStatus;
+    request.actualCastingType = actualCastingType;
+    request.pumpDispatchedBy = user.id;
+    request.pumpDispatchedAt = nowIso();
+    request.pumpVehicleNumber = input.pumpDispatched ? input.pumpVehicleNumber.trim() || null : null;
+    request.pumpOperatorName = input.pumpDispatched ? input.pumpOperatorName.trim() || null : null;
+    request.pumpOperatorPhone = input.pumpDispatched ? input.pumpOperatorPhone.trim() || null : null;
+    request.pumpDispatchNote =
+      input.note.trim() ||
+      (input.pumpDispatched ? "Production manager confirmed pump dispatch." : "Production manager confirmed no pump dispatch; dispatch will be treated as dump.");
+
+    logAudit(
+      database,
+      user,
+      "SalesOrderRequest",
+      request.id,
+      "PUMP_DISPATCH_UPDATE",
+      `${request.pumpDispatchNote} Planned ${request.plannedCastingType}, actual ${request.actualCastingType}.`,
     );
 
     return request;

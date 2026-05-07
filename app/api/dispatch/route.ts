@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser, requireNumber, requireString } from "@/lib/api";
 import { nowIso } from "@/lib/date";
-import { readDatabase, updateDatabase } from "@/lib/db";
-import type { DispatchRecord, DispatchStatus } from "@/lib/types";
+import { updateDatabase } from "@/lib/db";
+import { getNextChallanNumber, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
+import type { DispatchRecord } from "@/lib/types";
 
 export async function POST(request: Request) {
   try {
@@ -12,6 +13,9 @@ export async function POST(request: Request) {
     const orderId = requireString(body.orderId, "Order ID is required");
     const vehicleId = requireString(body.vehicleId, "Vehicle ID is required");
     const dispatchedQuantityCum = requireNumber(body.dispatchedQuantityCum, "Dispatch quantity is required");
+    const driverName = `${body.driverName ?? ""}`.trim();
+    const driverPhone = `${body.driverPhone ?? ""}`.trim();
+    const requestedDocumentMode = `${body.documentMode ?? "CHALLAN_ONLY"}`;
 
     if (dispatchedQuantityCum <= 0) {
       throw new Error("Dispatch quantity must be greater than zero.");
@@ -39,6 +43,9 @@ export async function POST(request: Request) {
 
       const activeMixDesign = draft.mixDesigns?.find((m) => m.plantId === plantId && m.grade === order.grade && m.isActive);
       if (!activeMixDesign) throw new Error(`No active Mix Design found for grade ${order.grade} at this plant.`);
+      const documentMode = normalizeDispatchDocumentMode(requestedDocumentMode, order);
+      const invoiceStatus = documentMode === "CHALLAN_ONLY" ? "NOT_REQUESTED" : "REQUESTED";
+      const challanNumber = getNextChallanNumber(draft.dispatchRecords?.map((record) => record.challanNumber) ?? []);
 
       // 1. Reduce remaining quantity
       order.remainingQuantity -= dispatchedQuantityCum;
@@ -53,7 +60,16 @@ export async function POST(request: Request) {
         plantId,
         vehicleId: vehicle.id,
         vehicleCode: vehicle.vehicleCode,
-        driverName: vehicle.driverName || "Unknown",
+        driverName: driverName || vehicle.driverName || "Unknown",
+        driverPhone,
+        challanNumber,
+        documentMode,
+        invoiceStatus,
+        invoiceNumber: null,
+        eInvoiceIrn: null,
+        actualCastingType: order.actualCastingType,
+        gstin: order.gstin,
+        pumpDispatchStatus: order.pumpDispatchStatus,
         dispatchedQuantityCum,
         returnedQuantityCum: 0,
         finalSuppliedCum: dispatchedQuantityCum,
@@ -86,7 +102,7 @@ export async function POST(request: Request) {
         entityType: "DISPATCH_RECORD",
         entityId: newRecord.id,
         action: "CREATED",
-        detail: `Dispatched ${dispatchedQuantityCum} CUM to Order ${orderId.slice(0, 8)} using vehicle ${vehicle.vehicleCode}`,
+        detail: `Created challan ${challanNumber} and dispatched ${dispatchedQuantityCum} CUM to Order ${orderId.slice(0, 8)} using vehicle ${vehicle.vehicleCode}. Document mode: ${documentMode}.`,
         createdAt: nowIso(),
       });
     });
