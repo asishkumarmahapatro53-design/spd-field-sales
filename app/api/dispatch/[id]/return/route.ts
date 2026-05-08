@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser, requireNumber } from "@/lib/api";
 import { nowIso } from "@/lib/date";
-import { readDatabase, updateDatabase } from "@/lib/db";
+import { updateDatabase } from "@/lib/db";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -20,7 +20,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       if (!record) throw new Error("Dispatch record not found.");
       if (record.plantId !== user.homePlantId) throw new Error("Unauthorized access to this record.");
       
-      if (record.status !== "DISPATCHED" && record.status !== "RETURNED") {
+      if (record.status !== "DISPATCHED") {
         throw new Error(`Cannot process return load for a record with status: ${record.status}`);
       }
 

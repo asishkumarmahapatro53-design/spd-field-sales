@@ -7,10 +7,9 @@ export function hashPassword(password: string) {
 }
 
 export function verifyPassword(password: string, hash: string) {
-  // Guard against malformed hashes (e.g. manually created users in Firestore)
-  // If the hash doesn't have a colon, we treat it as a plain-text password for testing/manual entry.
+  // Malformed hashes must never fall back to plain-text comparison.
   if (!hash || !hash.includes(":")) {
-    return password === hash;
+    return false;
   }
 
   const [salt, expectedHex] = hash.split(":");

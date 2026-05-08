@@ -3,6 +3,15 @@ import { jsonError, requireApiUser } from "@/lib/api";
 import { nowIso } from "@/lib/date";
 import { readDatabase, updateDatabase } from "@/lib/db";
 
+function escapeXml(value: unknown) {
+  return `${value ?? ""}`
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 function generateTallyXml(vouchers: any[]) {
   // A simplified Odoo-derived Tally ERP 9 import XML structure
   let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
@@ -19,20 +28,24 @@ function generateTallyXml(vouchers: any[]) {
 
   for (const v of vouchers) {
     const dateStr = new Date(v.createdAt).toISOString().slice(0, 10).replace(/-/g, "");
+    const brokerName = escapeXml(v.brokerName);
+    const siteName = escapeXml(v.siteName);
+    const quantityCum = escapeXml(v.quantityCum);
+    const ratePerCum = escapeXml(v.ratePerCum);
     
     xml += `        <TALLYMESSAGE xmlns:UDF="TallyUDF">\n`;
     xml += `          <VOUCHER VCHTYPE="Journal" ACTION="Create">\n`;
     xml += `            <DATE>${dateStr}</DATE>\n`;
     xml += `            <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>\n`;
-    xml += `            <PARTYLEDGERNAME>${v.brokerName}</PARTYLEDGERNAME>\n`;
-    xml += `            <NARRATION>Commission for Site: ${v.siteName}, Qty: ${v.quantityCum} cum @ ₹${v.ratePerCum}/cum</NARRATION>\n`;
+    xml += `            <PARTYLEDGERNAME>${brokerName}</PARTYLEDGERNAME>\n`;
+    xml += `            <NARRATION>Commission for Site: ${siteName}, Qty: ${quantityCum} cum @ Rs.${ratePerCum}/cum</NARRATION>\n`;
     xml += `            <ALLLEDGERENTRIES.LIST>\n`;
     xml += `              <LEDGERNAME>Commission Expense</LEDGERNAME>\n`;
     xml += `              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>\n`;
     xml += `              <AMOUNT>-${v.totalCommission}</AMOUNT>\n`; // Debit
     xml += `            </ALLLEDGERENTRIES.LIST>\n`;
     xml += `            <ALLLEDGERENTRIES.LIST>\n`;
-    xml += `              <LEDGERNAME>${v.brokerName}</LEDGERNAME>\n`;
+    xml += `              <LEDGERNAME>${brokerName}</LEDGERNAME>\n`;
     xml += `              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>\n`;
     xml += `              <AMOUNT>${v.totalCommission}</AMOUNT>\n`; // Credit
     xml += `            </ALLLEDGERENTRIES.LIST>\n`;
