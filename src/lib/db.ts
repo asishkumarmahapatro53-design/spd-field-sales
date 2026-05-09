@@ -873,6 +873,8 @@ interface FirestoreCollectionReadOptions {
   limit?: number;
 }
 
+let firebaseUserBootstrapChecked = false;
+
 function getCollectionRef(firestore: FirebaseFirestore.Firestore, collectionName: DatabaseCollectionName) {
   return firestore.collection(getFirebaseRootPath()).doc("collections").collection(collectionName);
 }
@@ -906,7 +908,16 @@ export async function readCollection<K extends DatabaseCollectionName>(
 ): Promise<Array<DatabaseCollectionItem<K>>> {
   if (hasFirebaseCredentialShape()) {
     try {
-      return await readFirebaseCollection(collectionName, options);
+      let items = await readFirebaseCollection(collectionName, options);
+
+      if (collectionName === "users" && items.length === 0 && !firebaseUserBootstrapChecked) {
+        const database = await ensureFirebaseCollections();
+        setDatabaseReadCache(database);
+        firebaseUserBootstrapChecked = true;
+        items = await readFirebaseCollection(collectionName, options);
+      }
+
+      return items;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Firebase collection read failed (${collectionName}): ${message}`);
