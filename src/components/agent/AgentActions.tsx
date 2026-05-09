@@ -72,9 +72,7 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, informalQu
   const pendingInformalQuotations = informalQuotationRequests.filter((quotation) => quotation.status === "PENDING").length;
   const pendingApprovals = approvals.filter((approval) => approval.status === "PENDING").length;
   const pendingOrders = salesOrderRequests.filter((request) => request.status === "PENDING_FINANCE").length;
-  const readyForSchedule = salesOrderRequests.filter(
-    (request) => request.status === "FINANCE_VERIFIED" || request.status === "SCHEDULE_REJECTED",
-  ).length;
+  const accountsOrderQueue = salesOrderRequests.filter((request) => request.status === "FINANCE_VERIFIED").length;
 
   return (
     <div className="action-workflow">
@@ -155,9 +153,9 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, informalQu
 
       <ActionAccordionSection
         step="07"
-        title="Add In Schedule"
-        description="Send finance-verified orders into the production schedule approval flow."
-        meta={`${readyForSchedule} ready`}
+        title="Sales Order Status"
+        description="Track ledger-created requests while Accounts creates the final sales order."
+        meta={`${accountsOrderQueue} with accounts`}
         isOpen={activeSection === "schedule"}
         onOpen={() => setActiveSection("schedule")}
       >

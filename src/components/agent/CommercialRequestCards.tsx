@@ -7,13 +7,12 @@ import {
   getApprovalItems,
   getApprovalItemById,
   getSalesOrderStatusMeta,
-  isOrderReadyForSchedule,
   normalizePaymentTerms,
   requiresPaymentReceipt,
   requiresPdcUpload,
   requiresPoUpload,
 } from "@/lib/commercial";
-import { extractPanFromGstin, isValidGstin, normalizeCastingType } from "@/lib/legal-workflow";
+import { extractPanFromGstin, isValidGstin, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
 import type { ApprovalRequest, ApprovalRequestItem, Lead, LeadSite, PaymentTerms, PaymentType, SalesOrderRequest } from "@/lib/types";
 import { parseApiError } from "@/components/agent/action-helpers";
 
@@ -36,6 +35,16 @@ const MIX_DESIGN_OPTIONS = [
 
 const DEFAULT_ITEM = () => ({ id: crypto.randomUUID(), grade: "", quotedPrice: "" });
 
+interface GstVerificationPayload {
+  verification?: {
+    legalName?: string | null;
+    tradeName?: string | null;
+    billingAddress?: string | null;
+    registrationStatus?: string | null;
+    pan?: string | null;
+  };
+}
+
 function formatPayment(value: string) {
   return value.replaceAll("_", " ").toLowerCase();
 }
@@ -51,20 +60,6 @@ function toDateInputValue(value: string | null | undefined) {
   }
 
   return date.toISOString().slice(0, 10);
-}
-
-function toDateTimeLocalValue(value: string | null | undefined) {
-  if (!value) {
-    return "";
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const localTime = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
-  return localTime.toISOString().slice(0, 16);
 }
 
 function money(value: number | null | undefined) {
@@ -416,6 +411,9 @@ export function SalesOrderRequestCard({
   const [gstLegalName, setGstLegalName] = useState("");
   const [gstBillingAddress, setGstBillingAddress] = useState("");
   const [agentGstConfirmed, setAgentGstConfirmed] = useState(false);
+  const [gstLookupBusy, setGstLookupBusy] = useState(false);
+  const [gstLookupMessage, setGstLookupMessage] = useState("");
+  const [gstLookupError, setGstLookupError] = useState("");
   const normalizedPaymentTerms = selectedApproval
     ? normalizePaymentTerms(selectedApproval.paymentType, selectedApproval.paymentTerms)
     : "ADVANCE";
@@ -484,12 +482,56 @@ export function SalesOrderRequestCard({
     setGstLegalName("");
     setGstBillingAddress("");
     setAgentGstConfirmed(false);
+    setGstLookupMessage("");
+    setGstLookupError("");
     startTransition(() => router.refresh());
   }
 
-  const normalizedGstin = gstin.trim().toUpperCase().replace(/\s+/g, "");
+  const normalizedGstin = normalizeGstin(gstin);
   const gstPan = normalizedGstin ? extractPanFromGstin(normalizedGstin) : null;
   const hasValidGstin = normalizedGstin ? isValidGstin(normalizedGstin) : false;
+
+  async function fetchGstDetails() {
+    setGstLookupMessage("");
+    setGstLookupError("");
+    setAgentGstConfirmed(false);
+
+    if (!hasValidGstin) {
+      setGstLookupError("Enter a valid GSTIN before fetching legal details.");
+      return;
+    }
+
+    setGstLookupBusy(true);
+
+    try {
+      const response = await fetch("/api/gst/verify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ gstin: normalizedGstin }),
+      });
+
+      if (!response.ok) {
+        setGstLookupError(await parseApiError(response));
+        return;
+      }
+
+      const payload = (await response.json()) as GstVerificationPayload;
+      const verification = payload.verification;
+
+      setGstin(normalizedGstin);
+      setGstLegalName(verification?.legalName ?? "");
+      setGstBillingAddress(verification?.billingAddress ?? "");
+      setGstLookupMessage(
+        `Fetched GST details${verification?.registrationStatus ? ` (${verification.registrationStatus})` : ""}. Please confirm before submitting.`,
+      );
+    } catch {
+      setGstLookupError("Could not reach GSTVerify right now. Please try again.");
+    } finally {
+      setGstLookupBusy(false);
+    }
+  }
 
   return (
     <>
@@ -555,11 +597,16 @@ export function SalesOrderRequestCard({
                 onChange={(event) => {
                   setGstin(event.target.value.toUpperCase());
                   setAgentGstConfirmed(false);
+                  setGstLookupMessage("");
+                  setGstLookupError("");
                 }}
                 placeholder="22AAAAA0000A1Z5"
                 maxLength={15}
               />
               <span className="hint">{gstPan ? `PAN auto-detected: ${gstPan}` : "Leave blank only when this dispatch must remain challan-only."}</span>
+              <button className="button-secondary mt-12" type="button" disabled={gstLookupBusy || !hasValidGstin} onClick={() => void fetchGstDetails()}>
+                {gstLookupBusy ? "Fetching..." : "Fetch GST details"}
+              </button>
             </div>
             <div className="field">
               <label htmlFor="salesGstLegalName">Legal business name</label>
@@ -593,6 +640,8 @@ export function SalesOrderRequestCard({
               required={Boolean(normalizedGstin)}
             />
           </div>
+          {gstLookupMessage ? <div className="success-box">{gstLookupMessage}</div> : null}
+          {gstLookupError ? <div className="error-box">{gstLookupError}</div> : null}
           {normalizedGstin ? (
             <label className="row-meta">
               <input
@@ -759,169 +808,57 @@ export function SalesOrderRequestCard({
 }
 
 export function ScheduleRequestCard({ salesOrderRequests }: { salesOrderRequests: SalesOrderRequest[] }) {
-  const router = useRouter();
-  const [isRefreshing, startTransition] = useTransition();
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState("");
-  const [error, setError] = useState("");
-  const scheduleReadyOrders = useMemo(
-    () => salesOrderRequests.filter((request) => isOrderReadyForSchedule(request)),
-    [salesOrderRequests],
+  const ledgerCreatedOrders = salesOrderRequests.filter((request) => request.status === "FINANCE_VERIFIED");
+  const productionOrders = salesOrderRequests.filter(
+    (request) => request.status === "SCHEDULE_PENDING" || request.status === "SCHEDULE_APPROVED" || request.status === "SCHEDULE_REJECTED",
   );
-  const [requestId, setRequestId] = useState(scheduleReadyOrders[0]?.id ?? "");
-  const selectedRequest = scheduleReadyOrders.find((request) => request.id === requestId) ?? scheduleReadyOrders[0] ?? null;
-  const [receiverName, setReceiverName] = useState("");
-  const [receiverPhone, setReceiverPhone] = useState("");
-  const [scheduleDateTime, setScheduleDateTime] = useState("");
-
-  useEffect(() => {
-    if (!selectedRequest) {
-      setReceiverName("");
-      setReceiverPhone("");
-      setScheduleDateTime("");
-      return;
-    }
-
-    setReceiverName(selectedRequest.scheduleReceiverName ?? selectedRequest.receiverName ?? "");
-    setReceiverPhone(selectedRequest.scheduleReceiverPhone ?? selectedRequest.receiverPhone ?? "");
-    setScheduleDateTime(toDateTimeLocalValue(selectedRequest.scheduleDateTime));
-  }, [selectedRequest]);
-
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedRequest) {
-      return;
-    }
-
-    setBusy(true);
-    setFeedback("");
-    setError("");
-
-    const formData = new FormData(event.currentTarget);
-    const response = await fetch(`/api/sales-order-requests/${selectedRequest.id}/schedule`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        scheduleDateTime: `${formData.get("scheduleDateTime") ?? ""}`,
-        receiverName: `${formData.get("receiverName") ?? ""}`,
-        receiverPhone: `${formData.get("receiverPhone") ?? ""}`,
-        note: `${formData.get("note") ?? ""}`,
-      }),
-    });
-
-    if (!response.ok) {
-      setError(await parseApiError(response));
-      setBusy(false);
-      return;
-    }
-
-    setBusy(false);
-    setFeedback("Request sent to the production schedule approval queue.");
-    startTransition(() => router.refresh());
-  }
 
   return (
     <>
-      <form className="form-grid" onSubmit={handleSubmit}>
-        <div className="field">
-          <label htmlFor="scheduleRequestId">Finance-verified order</label>
-          <select
-            id="scheduleRequestId"
-            value={requestId}
-            onChange={(event) => setRequestId(event.target.value)}
-            required
-          >
-            {scheduleReadyOrders.length ? null : <option value="">No finance-verified orders ready for scheduling</option>}
-            {scheduleReadyOrders.map((request) => (
-              <option key={request.id} value={request.id}>
-                {request.customerName} - {request.grade} - {request.quantity} CUM
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="note-box">
+        <strong>Accounts now creates the sales order.</strong>
+        <p style={{ margin: "8px 0 0", color: "var(--muted)" }}>
+          After ledger creation, the request appears in Accounts under Create Sales Order. Once Accounts creates it,
+          it moves to the Production Manager dashboard for schedule approval and pump/dump decision.
+        </p>
+      </div>
 
-        {selectedRequest ? (
-          <div className="summary-card">
-            <div className="panel-header">
-              <div>
-                <h4>{selectedRequest.customerName}</h4>
-                <p className="panel-copy">{selectedRequest.siteAddress}</p>
+      <div className="data-list mt-16">
+        {ledgerCreatedOrders.length ? (
+          ledgerCreatedOrders.slice(0, 4).map((request) => (
+            <div key={request.id} className="data-row">
+              <div className="panel-header">
+                <h4>{request.customerName}</h4>
+                <span className="status-badge status-approved">Waiting for accounts sales order</span>
               </div>
-              <strong>{money(selectedRequest.amount)}</strong>
+              <p>{request.grade} | {request.quantity} CUM | {money(request.amount)}</p>
+              <div className="row-meta">
+                <span>{request.siteName}</span>
+                <span>Ledger created</span>
+              </div>
             </div>
-            <div className="row-meta">
-              <span>{selectedRequest.grade}</span>
-              <span>{selectedRequest.quantity} CUM</span>
-              <span>{formatPayment(selectedRequest.priority)}</span>
-            </div>
-          </div>
-        ) : null}
+          ))
+        ) : (
+          <div className="note-box">No ledger-created orders are waiting for Accounts sales order creation.</div>
+        )}
+      </div>
 
-        <div className="three-grid">
-          <div className="field">
-            <label htmlFor="scheduleDateTime">Schedule date and time</label>
-            <input
-              id="scheduleDateTime"
-              name="scheduleDateTime"
-              type="datetime-local"
-              value={scheduleDateTime}
-              onChange={(event) => setScheduleDateTime(event.target.value)}
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="scheduleReceiverName">Receiver name</label>
-            <input
-              id="scheduleReceiverName"
-              name="receiverName"
-              value={receiverName}
-              onChange={(event) => setReceiverName(event.target.value)}
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="scheduleReceiverPhone">Receiver phone</label>
-            <input
-              id="scheduleReceiverPhone"
-              name="receiverPhone"
-              value={receiverPhone}
-              onChange={(event) => setReceiverPhone(event.target.value)}
-              required
-            />
-          </div>
-        </div>
-
-        <div className="field">
-          <label htmlFor="scheduleNote">Schedule note</label>
-          <textarea id="scheduleNote" name="note" placeholder="Preferred slot, unloading instructions, or resubmission note." />
-        </div>
-
-        {feedback ? <div className="success-box">{feedback}</div> : null}
-        {error ? <div className="error-box">{error}</div> : null}
-        <button className="button-secondary" type="submit" disabled={busy || isRefreshing || !selectedRequest}>
-          {busy ? "Submitting..." : isRefreshing ? "Refreshing..." : "Create request to add in schedule"}
-        </button>
-      </form>
-
-      {salesOrderRequests.length ? (
+      {productionOrders.length ? (
         <div className="data-list mt-16">
-          {salesOrderRequests
-            .filter((request) => request.status === "SCHEDULE_PENDING" || request.status === "SCHEDULE_APPROVED" || request.status === "SCHEDULE_REJECTED")
-            .slice(0, 4)
-            .map((request) => {
-              const statusMeta = getSalesOrderStatusMeta(request.status);
-              return (
-                <div key={request.id} className="data-row">
-                  <div className="panel-header">
-                    <h4>{request.customerName}</h4>
-                    <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
-                  </div>
-                  <p>
-                    {request.scheduleDateTime ? new Date(request.scheduleDateTime).toLocaleString("en-IN") : "Schedule not fixed"} | {request.scheduleReceiverName ?? request.receiverName}
-                  </p>
+          {productionOrders.slice(0, 4).map((request) => {
+            const statusMeta = getSalesOrderStatusMeta(request.status);
+            return (
+              <div key={request.id} className="data-row">
+                <div className="panel-header">
+                  <h4>{request.customerName}</h4>
+                  <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
                 </div>
-              );
-            })}
+                <p>
+                  {request.scheduleDateTime ? new Date(request.scheduleDateTime).toLocaleString("en-IN") : "Production date pending"} | {request.scheduleReceiverName ?? request.receiverName}
+                </p>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </>

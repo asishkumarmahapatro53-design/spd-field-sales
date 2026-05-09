@@ -2080,6 +2080,54 @@ export async function reviewSalesOrderRequestByAccounting(
   });
 }
 
+export async function createSalesOrderFromLedgerByAccounting(user: User, requestId: string, note: string) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    if (request.status !== "FINANCE_VERIFIED") {
+      throw new Error("Create the customer ledger before creating the sales order.");
+    }
+
+    const scheduleDateTime = new Date(request.requiredDate);
+    if (Number.isNaN(scheduleDateTime.getTime())) {
+      throw new Error("Sales order required date is invalid. Ask the sales agent to correct the request.");
+    }
+
+    if (!request.receiverName.trim() || !request.receiverPhone.trim()) {
+      throw new Error("Receiver name and phone number are required before creating the sales order.");
+    }
+
+    const now = nowIso();
+    request.scheduleDateTime = scheduleDateTime.toISOString();
+    request.scheduleReceiverName = request.receiverName.trim();
+    request.scheduleReceiverPhone = request.receiverPhone.trim();
+    request.scheduleRequestedAt = now;
+    request.scheduleDecidedAt = null;
+    request.scheduleDecidedBy = null;
+    request.scheduleNote =
+      note.trim() ||
+      "Accounts created the sales order from the verified customer ledger and sent it to production.";
+    request.status = "SCHEDULE_PENDING";
+
+    logAudit(
+      database,
+      user,
+      "SalesOrderRequest",
+      request.id,
+      "SALES_ORDER_CREATED",
+      request.scheduleNote,
+    );
+
+    return request;
+  });
+}
+
 export async function submitScheduleRequest(
   user: User,
   requestId: string,
@@ -2103,8 +2151,8 @@ export async function submitScheduleRequest(
       throw new Error("You can only schedule your own sales order requests.");
     }
 
-    if (request.status !== "FINANCE_VERIFIED" && request.status !== "SCHEDULE_REJECTED") {
-      throw new Error("Only finance-verified sales orders can be sent for schedule approval.");
+    if (request.status !== "SCHEDULE_REJECTED") {
+      throw new Error("Accounts must create the sales order before it enters production scheduling.");
     }
 
     const scheduleDateTime = new Date(input.scheduleDateTime);

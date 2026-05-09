@@ -15,18 +15,90 @@ async function parseApiError(response: Response) {
   return payload.error ?? "Request failed.";
 }
 
+function OrderSnapshot({ request }: { request: SalesOrderRequest }) {
+  return (
+    <>
+      <div className="row-meta">
+        <span>{request.siteName}</span>
+        <span>{request.grade}</span>
+        <span>{request.quantity} CUM</span>
+        <span>{money(request.amount)}</span>
+      </div>
+      <p>{request.siteAddress}</p>
+      <div className="row-meta">
+        <span>{request.paymentType.replaceAll("_", " ").toLowerCase()}/{request.paymentTerms.replaceAll("_", " ").toLowerCase()}</span>
+        <span>Receiver {request.receiverName}</span>
+        <span>{request.receiverPhone}</span>
+        <span>Required {toIndiaTimeLabel(request.requiredDate)}</span>
+      </div>
+    </>
+  );
+}
+
+function LedgerDetails({ request }: { request: SalesOrderRequest }) {
+  return (
+    <div className="summary-card">
+      <div className="panel-header">
+        <div>
+          <h4>Ledger details</h4>
+          <p className="panel-copy">
+            {request.gstin ? `GSTIN ${request.gstin}` : "No GSTIN captured; invoice mode will stay locked to challan-only."}
+          </p>
+        </div>
+        <span className={`status-badge status-${request.gstVerificationStatus.toLowerCase()}`}>
+          {request.gstVerificationStatus.replaceAll("_", " ").toLowerCase()}
+        </span>
+      </div>
+      <div className="row-meta">
+        <span>PAN {request.gstPan ?? "not detected"}</span>
+        <span>{request.gstLegalName ?? "Legal name not captured"}</span>
+        <span>Ship to site address</span>
+      </div>
+      <p>{request.gstBillingAddress ?? "Billing address not captured"}</p>
+    </div>
+  );
+}
+
+function DocumentLinks({ request }: { request: SalesOrderRequest }) {
+  return (
+    <>
+      {request.poDocumentUrl ? (
+        <a className="button-ghost" href={request.poDocumentUrl} target="_blank" rel="noreferrer">
+          View PO
+        </a>
+      ) : null}
+      {request.pdcDocumentUrl ? (
+        <a className="button-ghost" href={request.pdcDocumentUrl} target="_blank" rel="noreferrer">
+          View PDC
+        </a>
+      ) : null}
+      {request.gstCertificateUrl ? (
+        <a className="button-ghost" href={request.gstCertificateUrl} target="_blank" rel="noreferrer">
+          View GST certificate
+        </a>
+      ) : null}
+    </>
+  );
+}
+
 export function AccountingSalesOrderVerification({ requests }: { requests: SalesOrderRequest[] }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isRefreshing, startTransition] = useTransition();
-  const pendingFinance = requests.filter((entry) => entry.status === "PENDING_FINANCE");
-  const financeVerified = requests.filter((entry) => entry.status === "FINANCE_VERIFIED");
-  const ledgerReady = requests.filter((entry) => entry.status === "SCHEDULE_APPROVED");
-  const pendingLedger = pendingFinance.filter((entry) => entry.gstin || entry.gstCertificateUrl);
+  const ledgerRequests = requests.filter((entry) => entry.status === "PENDING_FINANCE");
+  const salesOrderRequests = requests.filter((entry) => entry.status === "FINANCE_VERIFIED");
+  const productionQueue = requests.filter((entry) => entry.status === "SCHEDULE_PENDING");
+  const productionApproved = requests.filter((entry) => entry.status === "SCHEDULE_APPROVED");
 
-  async function review(id: string, status: "FINANCE_VERIFIED" | "FINANCE_REJECTED", note: string) {
+  function refreshWithMessage(nextMessage: string) {
+    setBusyId("");
+    setMessage(nextMessage);
+    startTransition(() => router.refresh());
+  }
+
+  async function createLedger(id: string) {
     setBusyId(id);
     setMessage("");
     setError("");
@@ -34,7 +106,10 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
     const response = await fetch(`/api/sales-order-requests/${id}/finance-review`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, note }),
+      body: JSON.stringify({
+        status: "FINANCE_VERIFIED",
+        note: "Accounts created the customer ledger and verified GST/payment documents.",
+      }),
     });
 
     if (!response.ok) {
@@ -43,126 +118,163 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
       return;
     }
 
-    setBusyId("");
-    setMessage(status === "FINANCE_VERIFIED" ? "Sales order verified by finance." : "Sales order rejected by finance.");
-    startTransition(() => router.refresh());
+    refreshWithMessage("Customer ledger created. Request moved to Create Sales Order section.");
+  }
+
+  async function rejectLedger(id: string) {
+    setBusyId(id);
+    setMessage("");
+    setError("");
+
+    const response = await fetch(`/api/sales-order-requests/${id}/finance-review`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "FINANCE_REJECTED",
+        note: "Accounts rejected the ledger request due to missing or invalid documents.",
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    refreshWithMessage("Ledger request rejected and sent back for correction.");
+  }
+
+  async function createSalesOrder(id: string) {
+    setBusyId(id);
+    setMessage("");
+    setError("");
+
+    const response = await fetch(`/api/sales-order-requests/${id}/create-sales-order`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        note: "Accounts created the sales order from the verified ledger and sent it to production.",
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    refreshWithMessage("Sales order created and sent to Production Manager dashboard.");
   }
 
   return (
     <section className="accounting-panel">
       <div className="panel-header">
         <div>
-          <h3>Commercial Order Verification</h3>
-          <p className="panel-copy">Verify PO, PDC, and payment evidence before the order moves into schedule and ledger handling.</p>
+          <h3>Ledger & Sales Order Desk</h3>
+          <p className="panel-copy">Sales agent requests first land in ledger creation, then move to sales order creation after Accounts approval.</p>
         </div>
       </div>
 
       <div className="accounting-metric-row compact">
         <div className="summary-cell">
-          <span className="summary-label">Pending ledger</span>
-          <strong>{pendingLedger.length}</strong>
+          <span className="summary-label">Ledger requests</span>
+          <strong>{ledgerRequests.length}</strong>
         </div>
         <div className="summary-cell">
-          <span className="summary-label">Pending finance</span>
-          <strong>{pendingFinance.length}</strong>
+          <span className="summary-label">Sales order pending</span>
+          <strong>{salesOrderRequests.length}</strong>
         </div>
         <div className="summary-cell">
-          <span className="summary-label">Finance verified</span>
-          <strong>{financeVerified.length}</strong>
+          <span className="summary-label">Production queue</span>
+          <strong>{productionQueue.length}</strong>
         </div>
         <div className="summary-cell">
-          <span className="summary-label">Ledger ready</span>
-          <strong>{ledgerReady.length}</strong>
+          <span className="summary-label">Production approved</span>
+          <strong>{productionApproved.length}</strong>
         </div>
       </div>
 
       {message ? <div className="success-box">{message}</div> : null}
       {error ? <div className="error-box">{error}</div> : null}
 
+      <div className="accounting-command-row mt-24">
+        <div>
+          <h2>Create New Ledger</h2>
+          <p className="panel-copy">Pending requests from sales agents appear here first. Accounts verifies GST/payment documents and creates the customer ledger.</p>
+        </div>
+        <span className="status-badge status-pending">{ledgerRequests.length} pending</span>
+      </div>
+
       <div className="data-list mt-16">
-        {pendingFinance.length ? (
-          pendingFinance.map((request) => (
+        {ledgerRequests.length ? (
+          ledgerRequests.map((request) => (
             <article key={request.id} className="data-row">
               <div className="panel-header">
                 <h4>{request.customerName}</h4>
-                <span className="status-badge status-pending">Finance review</span>
+                <span className="status-badge status-pending">Pending ledger request</span>
               </div>
-              <div className="row-meta">
-                <span>{request.siteName}</span>
-                <span>{request.grade}</span>
-                <span>{request.quantity} CUM</span>
-                <span>{money(request.amount)}</span>
-              </div>
-              <p>{request.siteAddress}</p>
-              <div className="row-meta">
-                <span>{request.paymentType.replaceAll("_", " ").toLowerCase()}/{request.paymentTerms.replaceAll("_", " ").toLowerCase()}</span>
-                <span>Receiver {request.receiverName}</span>
-                <span>{request.receiverPhone}</span>
-              </div>
+              <OrderSnapshot request={request} />
               <div className="row-meta">
                 <span>{request.poDocumentUrl ? "PO uploaded" : "PO not uploaded"}</span>
                 <span>{request.pdcDocumentUrl ? "PDC uploaded" : "PDC not uploaded"}</span>
                 <span>{request.paymentReceivedConfirmed ? "Payment confirmed" : "Payment not confirmed"}</span>
               </div>
-              <div className="summary-card">
-                <div className="panel-header">
-                  <div>
-                    <h4>Pending ledger details</h4>
-                    <p className="panel-copy">{request.gstin ? `GSTIN ${request.gstin}` : "No GSTIN captured; batcher invoice mode will stay locked to challan-only."}</p>
-                  </div>
-                  <span className={`status-badge status-${request.gstVerificationStatus.toLowerCase()}`}>
-                    {request.gstVerificationStatus.replaceAll("_", " ").toLowerCase()}
-                  </span>
-                </div>
-                <div className="row-meta">
-                  <span>PAN {request.gstPan ?? "not detected"}</span>
-                  <span>{request.gstLegalName ?? "Legal name not captured"}</span>
-                  <span>Ship to site address</span>
-                </div>
-                <p>{request.gstBillingAddress ?? "Billing address not captured"}</p>
-              </div>
+              <LedgerDetails request={request} />
               <div className="button-row">
-                {request.poDocumentUrl ? (
-                  <a className="button-ghost" href={request.poDocumentUrl} target="_blank" rel="noreferrer">
-                    View PO
-                  </a>
-                ) : null}
-                {request.pdcDocumentUrl ? (
-                  <a className="button-ghost" href={request.pdcDocumentUrl} target="_blank" rel="noreferrer">
-                    View PDC
-                  </a>
-                ) : null}
-                {request.gstCertificateUrl ? (
-                  <a className="button-ghost" href={request.gstCertificateUrl} target="_blank" rel="noreferrer">
-                    View GST certificate
-                  </a>
-                ) : null}
-                <button
-                  className="button"
-                  type="button"
-                  disabled={busyId === request.id || isRefreshing}
-                  onClick={() => void review(request.id, "FINANCE_VERIFIED", "Finance verified the order documents and payment status.")}
-                >
-                  {busyId === request.id ? "Saving..." : "Verify"}
+                <DocumentLinks request={request} />
+                <button className="button" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void createLedger(request.id)}>
+                  {busyId === request.id ? "Saving..." : "Create ledger"}
                 </button>
-                <button
-                  className="button-danger"
-                  type="button"
-                  disabled={busyId === request.id || isRefreshing}
-                  onClick={() => void review(request.id, "FINANCE_REJECTED", "Finance rejected the order due to missing or invalid documents.")}
-                >
+                <button className="button-danger" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void rejectLedger(request.id)}>
                   {busyId === request.id ? "Saving..." : "Reject"}
                 </button>
               </div>
             </article>
           ))
         ) : (
-          <div className="note-box">No sales order requests are waiting for finance review right now.</div>
+          <div className="note-box">No sales order requests are waiting for ledger creation right now.</div>
         )}
       </div>
 
+      <div className="accounting-command-row mt-24">
+        <div>
+          <h2>Create Sales Order</h2>
+          <p className="panel-copy">After ledger creation, the same request waits here until Accounts creates the sales order and sends it to Production Manager.</p>
+        </div>
+        <span className="status-badge status-approved">{salesOrderRequests.length} pending</span>
+      </div>
+
       <div className="data-list mt-16">
-        {requests.filter((entry) => entry.status !== "PENDING_FINANCE").slice(0, 6).map((request) => {
+        {salesOrderRequests.length ? (
+          salesOrderRequests.map((request) => (
+            <article key={request.id} className="data-row">
+              <div className="panel-header">
+                <h4>{request.customerName}</h4>
+                <span className="status-badge status-approved">Ledger created</span>
+              </div>
+              <OrderSnapshot request={request} />
+              <LedgerDetails request={request} />
+              <div className="button-row">
+                <DocumentLinks request={request} />
+                <button className="button" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void createSalesOrder(request.id)}>
+                  {busyId === request.id ? "Creating..." : "Create sales order"}
+                </button>
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="note-box">No ledger-created requests are waiting for sales order creation right now.</div>
+        )}
+      </div>
+
+      <div className="accounting-command-row mt-24">
+        <div>
+          <h2>Sales Order Pipeline</h2>
+          <p className="panel-copy">Recent orders after Accounts action, including production decisions.</p>
+        </div>
+      </div>
+      <div className="data-list mt-16">
+        {requests.filter((entry) => entry.status !== "PENDING_FINANCE" && entry.status !== "FINANCE_VERIFIED").slice(0, 6).map((request) => {
           const statusMeta = getSalesOrderStatusMeta(request.status);
           return (
             <article key={request.id} className="data-row">
@@ -176,7 +288,7 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
                 <span>{money(request.amount)}</span>
                 <span>{toIndiaTimeLabel(request.createdAt)}</span>
               </div>
-              {request.scheduleDateTime ? <p>Scheduled for {toIndiaTimeLabel(request.scheduleDateTime)}</p> : null}
+              {request.scheduleDateTime ? <p>Production requested for {toIndiaTimeLabel(request.scheduleDateTime)}</p> : null}
             </article>
           );
         })}

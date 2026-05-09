@@ -67,13 +67,13 @@ export function getApprovalItemById(approval: ApprovalRequest, itemId: string | 
 export function getSalesOrderStatusMeta(status: SalesOrderRequestStatus) {
   switch (status) {
     case "PENDING_FINANCE":
-      return { label: "Pending finance", className: "status-pending" };
+      return { label: "Pending ledger", className: "status-pending" };
     case "FINANCE_VERIFIED":
-      return { label: "Finance verified", className: "status-approved" };
+      return { label: "Ledger created", className: "status-approved" };
     case "FINANCE_REJECTED":
       return { label: "Finance rejected", className: "status-danger" };
     case "SCHEDULE_PENDING":
-      return { label: "Schedule pending", className: "status-manager_view" };
+      return { label: "Sales order created", className: "status-manager_view" };
     case "SCHEDULE_APPROVED":
       return { label: "Schedule approved", className: "status-open-good" };
     case "SCHEDULE_REJECTED":
