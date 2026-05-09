@@ -176,7 +176,7 @@ export function AgentActionPanel({ user, leads, leadSites, approvals, informalQu
   );
 }
 
-function OdometerUploadCard({
+export function OdometerUploadCard({
   agentName,
   employeeId,
 }: {
@@ -425,7 +425,7 @@ function toStakeholderLines(lead: Lead | null) {
     .join("\n");
 }
 
-function HelpRequestCard() {
+export function HelpRequestCard() {
   const router = useRouter();
   const [isRefreshing, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);

@@ -1,39 +1,121 @@
-import { AppShell } from "@/components/AppShell";
+import Link from "next/link";
 import { MetricCard } from "@/components/MetricCard";
-import { Panel } from "@/components/Panel";
-import { StatusBadge } from "@/components/StatusBadge";
-import { AgentActionPanel } from "@/components/agent/AgentActions";
-import { AgentReimbursementClaims } from "@/components/agent/AgentReimbursementClaims";
-import { AiAssistant } from "@/components/agent/AiAssistant";
-import { ReadingLogList } from "@/components/agent/ReadingLogList";
-import { ReimbursementSummaryList } from "@/components/agent/ReimbursementSummaryList";
-import { SiteVisitLogList } from "@/components/agent/SiteVisitLogList";
+import { AgentLeadFocus } from "@/components/agent/AgentLeadFocus";
+import { AgentWorkspaceShell } from "@/components/agent/AgentWorkspaceShell";
 import { requireUser } from "@/lib/auth";
 import { toIndiaTimeLabel } from "@/lib/date";
 import { getAgentDashboardData } from "@/lib/repository";
 
+type ActionIcon = "odometer" | "site" | "price" | "quote" | "approval" | "order" | "status" | "help";
+
+const ACTION_TILES: Array<{ href: string; label: string; icon: ActionIcon; highlight?: boolean }> = [
+  { href: "/agent/odometer", label: "Odometer", icon: "odometer" },
+  { href: "/agent/site-visit", label: "Site Visit", icon: "site" },
+  { href: "/agent/instant-price", label: "Price", icon: "price" },
+  { href: "/agent/informal-quotation", label: "Quotation", icon: "quote" },
+  { href: "/agent/approval", label: "Final Approval", icon: "approval" },
+  { href: "/agent/sales-order", label: "Sales Order", icon: "order" },
+  { href: "/agent/order-status", label: "Status", icon: "status" },
+  { href: "/agent/help", label: "Help", icon: "help", highlight: true },
+];
+
+function ActionTileIcon({ icon }: { icon: ActionIcon }) {
+  const shared = {
+    width: 24,
+    height: 24,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    xmlns: "http://www.w3.org/2000/svg",
+    "aria-hidden": true,
+  };
+
+  switch (icon) {
+    case "odometer":
+      return (
+        <svg {...shared}>
+          <path d="M4 15.5a8 8 0 1 1 16 0" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+          <path d="m12 15 4-5" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+          <path d="M7 17h10" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+        </svg>
+      );
+    case "site":
+      return (
+        <svg {...shared}>
+          <path d="M12 21s6-5.2 6-11a6 6 0 1 0-12 0c0 5.8 6 11 6 11Z" stroke="currentColor" strokeWidth="1.9" />
+          <path d="M12 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke="currentColor" strokeWidth="1.9" />
+        </svg>
+      );
+    case "price":
+      return (
+        <svg {...shared}>
+          <path d="M8 5h8M8 9h8M9 13h4a3 3 0 0 0 0-6H8l7 12" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "quote":
+      return (
+        <svg {...shared}>
+          <path d="M7 3h7l4 4v14H7V3Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M14 3v5h5M9.5 12h5M9.5 16h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case "approval":
+      return (
+        <svg {...shared}>
+          <path d="M6 4h12v16H6V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="m8.5 12 2.2 2.2 4.8-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "order":
+      return (
+        <svg {...shared}>
+          <path d="M5 5h2l1.4 9.2a2 2 0 0 0 2 1.8h5.7a2 2 0 0 0 1.9-1.4L20 8H8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M10 20h.1M17 20h.1" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      );
+    case "status":
+      return (
+        <svg {...shared}>
+          <path d="M5 19V5M5 19h14M9 16v-5M13 16V8M17 16v-2" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    default:
+      return (
+        <svg {...shared}>
+          <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M9.8 9.2a2.3 2.3 0 1 1 3.8 1.8c-.9.7-1.6 1.1-1.6 2.3M12 17h.1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
+  }
+}
+
 export default async function AgentPage() {
   const user = await requireUser("SALES_AGENT");
   const data = await getAgentDashboardData(user);
+  const firstName = data.user.name.split(" ")[0] || data.user.name;
   const currentTarget = data.targets[0]?.quantityTarget ?? 0;
   const openTasksCount = data.tasks.filter((task) => task.status === "OPEN").length;
+  const pendingReadingsCount = data.readings.filter((reading) => reading.status === "AWAITING_CONFIRMATION").length;
+  const pendingInformalQuotations = data.informalQuotationRequests.filter((quotation) => quotation.status === "PENDING").length;
+  const pendingApprovals = data.approvals.filter((approval) => approval.status === "PENDING").length;
+  const latestVisit = data.siteVisits[0] ?? null;
+  const rejectedGstOrder = data.salesOrderRequests.find((order) => order.gstVerificationStatus === "REJECTED") ?? null;
   const todaySummary = data.reimbursementSummaries[0] ?? null;
   const todayStatusLabel =
     !todaySummary
       ? "No record yet"
       : todaySummary.status === "MANUAL_VERIFIED"
-      ? "Manager verified"
-      : todaySummary.status === "PENDING"
-        ? "Awaiting verification"
-        : "Verified by agent";
+        ? "Manager verified"
+        : todaySummary.status === "PENDING"
+          ? "Awaiting verification"
+          : "Verified by agent";
 
   return (
-    <AppShell
-      user={user}
-      title="Sales Agent Dashboard"
-      subtitle="Capture readings, track site leads, request approvals, and keep the reimbursement record complete."
-      statusLabel={data.activeSession ? "WORKDAY_OPEN" : "READY"}
-      compact
+    <AgentWorkspaceShell
+      user={data.user}
+      activeSession={data.activeSession}
+      current="overview"
+      title={`Hi, ${firstName}`}
+      subtitle={`Senior Sales Agent - ${data.user.employeeId}`}
     >
       <section className="metric-grid metric-grid-compact">
         <MetricCard
@@ -50,126 +132,115 @@ export default async function AgentPage() {
         />
       </section>
 
-      <Panel title="Action Center" description="Move through the day one workflow at a time.">
-        <AgentActionPanel
-          user={data.user}
-          leads={data.leads}
-          leadSites={data.leadSites}
-          approvals={data.approvals}
-          informalQuotationRequests={data.informalQuotationRequests}
-          salesOrderRequests={data.salesOrderRequests}
-        />
-      </Panel>
+      <section className="agent-command-board">
+        <div className="agent-command-center">
+          <section className="agent-action-center">
+            <div className="agent-command-section-title">
+              <h2>Action Center</h2>
+              <p>Core field work stays in the center, one page per job.</p>
+            </div>
+            <div className="agent-action-tile-grid">
+              {ACTION_TILES.map((item) => (
+                <Link key={item.href} href={item.href} className={item.highlight ? "agent-action-tile is-help" : "agent-action-tile"}>
+                  <span className="agent-action-tile-icon">
+                    <ActionTileIcon icon={item.icon} />
+                  </span>
+                  <strong>{item.label}</strong>
+                </Link>
+              ))}
+            </div>
+          </section>
 
-      <section className="agent-secondary-grid">
-        <Panel title="Daily Logs" description="Compact daily view of readings, tasks, and reimbursement status.">
-          <div className="section-stack">
-            <div className="three-grid">
-              <div className="summary-cell">
-                <span className="summary-label">Pending readings</span>
-                <strong>{data.readings.filter((reading) => reading.status === "AWAITING_CONFIRMATION").length}</strong>
-              </div>
-              <div className="summary-cell">
-                <span className="summary-label">Open tasks</span>
-                <strong>{openTasksCount}</strong>
-              </div>
-              <div className="summary-cell">
-                <span className="summary-label">Reimbursement</span>
-                <strong>{todayStatusLabel}</strong>
+          <section className="agent-log-panel">
+            <div className="agent-log-header">
+              <h2>Operational Logs</h2>
+              <div className="button-row">
+                <Link className="button-ghost" href="/agent/logs">
+                  History
+                </Link>
+                <Link className="button" href="/agent/site-visit">
+                  New Entry
+                </Link>
               </div>
             </div>
-
-            <ReadingLogList readings={data.readings} />
-
-            <details className="history-toggle">
-              <summary>
-                <span>Site Visit Logs ({data.siteVisits.length})</span>
-                <span className="history-toggle-copy">Show submitted reports</span>
-              </summary>
-              <div className="history-panel">
-                <SiteVisitLogList siteVisits={data.siteVisits} />
-              </div>
-            </details>
-
-            <details className="history-toggle">
-              <summary>
-                <span>Assigned Tasks ({data.tasks.length})</span>
-                <span className="history-toggle-copy">Show task list</span>
-              </summary>
-              <div className="history-panel">
-                <div className="data-list">
-                  {data.tasks.length ? (
-                    data.tasks.map((task) => (
-                      <div key={task.id} className="data-row">
-                        <h4>{task.subject}</h4>
-                        <p>{task.explanation}</p>
-                        <div className="row-meta">
-                          <span>Deadline {toIndiaTimeLabel(task.deadline)}</span>
-                          <span>{task.status}</span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="note-box">No secondary tasks assigned.</div>
-                  )}
+            <div className="agent-log-list">
+              <div className="agent-log-row">
+                <span className="agent-log-icon">KM</span>
+                <div>
+                  <strong>Odometer Reading Required</strong>
+                  <p>{pendingReadingsCount} reading item{pendingReadingsCount === 1 ? "" : "s"} need confirmation</p>
                 </div>
+                <Link className="button-ghost" href="/agent/odometer">
+                  Confirm
+                </Link>
               </div>
-            </details>
-
-            <details className="history-toggle" open>
-              <summary>
-                <span>Reimbursement Summary ({data.reimbursementSummaries.length})</span>
-                <span className="history-toggle-copy">Show daily reimbursement</span>
-              </summary>
-              <div className="history-panel">
-                <AgentReimbursementClaims claims={data.reimbursementClaims} summaries={data.reimbursementSummaries} />
-                <ReimbursementSummaryList summaries={data.reimbursementSummaries} />
-              </div>
-            </details>
-          </div>
-        </Panel>
-
-        <Panel
-          title="Lead Focus"
-          description="Upcoming follow-ups and strongest opportunities stay nearby, but out of the main action flow."
-        >
-          <div className="data-list">
-            {data.leads.length ? (
-              data.leads.slice(0, 5).map((lead) => (
-                <div key={lead.id} className="data-row">
-                  <div className="panel-header">
-                    <h4>{lead.siteName}</h4>
-                    <StatusBadge value={lead.stage} />
-                  </div>
-                  <p>{lead.siteAddress}</p>
-                  <div className="row-meta">
-                    <span>Score {lead.score}/10</span>
-                    <span>Follow-up {toIndiaTimeLabel(lead.nextFollowUpAt)}</span>
-                    <span>Supplier {lead.currentSupplier}</span>
-                    <span>{lead.siteCount ?? 1} site{(lead.siteCount ?? 1) === 1 ? "" : "s"}</span>
-                  </div>
-                  {lead.primarySiteLatLng ? (
-                    <div className="button-row">
-                      <a
-                        className="button-ghost"
-                        href={`https://www.google.com/maps/dir/?api=1&destination=${lead.primarySiteLatLng.lat},${lead.primarySiteLatLng.lng}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Get direction
-                      </a>
-                    </div>
-                  ) : null}
+              <div className="agent-log-row">
+                <span className="agent-log-icon is-warm">SV</span>
+                <div>
+                  <strong>{latestVisit ? latestVisit.siteName : "No site visit submitted today"}</strong>
+                  <p>{latestVisit ? `Visited ${toIndiaTimeLabel(latestVisit.visitedAt)} | Site readiness ${latestVisit.score}/10` : "Create the first field report from Site Visit."}</p>
                 </div>
-              ))
-            ) : (
-              <div className="note-box">No site leads yet. Your first site visit will create one.</div>
-            )}
-          </div>
-        </Panel>
+                <Link className="button-ghost" href="/agent/site-visit">
+                  Open
+                </Link>
+              </div>
+              <div className="agent-log-row is-danger">
+                <span className="agent-log-icon is-danger">GST</span>
+                <div>
+                  <strong>{rejectedGstOrder ? "Action: Re-verify GSTIN" : "GSTIN validation active"}</strong>
+                  <p>{rejectedGstOrder ? `${rejectedGstOrder.customerName} needs accounts correction` : "New GST orders verify legal name and billing address."}</p>
+                </div>
+                <Link className="button-danger" href="/agent/sales-order">
+                  Resolve Now
+                </Link>
+              </div>
+            </div>
+          </section>
+
+          <section className="agent-payment-card">
+            <div>
+              <h2>Payment Claims & Reimbursement</h2>
+              <p>{todayStatusLabel}</p>
+            </div>
+            <div className="agent-payment-grid">
+              <div>
+                <span>Claimable amount</span>
+                <strong>Rs {Math.round(todaySummary?.totalAmount ?? 0).toLocaleString("en-IN")}</strong>
+              </div>
+              <div>
+                <span>Accrued days</span>
+                <strong>{data.reimbursementSummaries.length} Days</strong>
+              </div>
+              <Link className="agent-payment-button" href="/agent/logs">
+                Request Claim
+              </Link>
+            </div>
+          </section>
+        </div>
+
+        <aside className="agent-command-right">
+          <section className="agent-right-card">
+            <div className="agent-right-card-header">
+              <h2>Lead Focus</h2>
+              <span className="agent-filter-lines" aria-hidden="true" />
+            </div>
+            <AgentLeadFocus leads={data.leads} maxItems={3} />
+            <Link className="agent-wide-button" href="/agent/leads">
+              View All Leads
+            </Link>
+          </section>
+
+          <section className="agent-compliance-card">
+            <h2>Compliance Monitor</h2>
+            <ul>
+              <li>Quotations strictly restricted to in-app view only.</li>
+              <li>{pendingApprovals} approval request{pendingApprovals === 1 ? "" : "s"} waiting for manager action.</li>
+              <li>GSTIN auto-validation active on sales order creation.</li>
+              <li>{openTasksCount} open support task{openTasksCount === 1 ? "" : "s"} in the work queue.</li>
+            </ul>
+          </section>
+        </aside>
       </section>
-      {/* Floating AI Assistant — available on every scroll position */}
-      <AiAssistant agentId={data.user.id} />
-    </AppShell>
+    </AgentWorkspaceShell>
   );
 }
