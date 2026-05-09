@@ -3,18 +3,18 @@ import { toIndiaTimeLabel } from "@/lib/date";
 import { isLoginDisabled } from "@/lib/auth";
 import { StatusBadge } from "@/components/StatusBadge";
 import { DashboardSwitcher } from "@/components/DashboardSwitcher";
-import { DashboardAutoRefresh } from "@/components/DashboardAutoRefresh";
+import { DashboardSyncControls } from "@/components/DashboardSyncControls";
 import { LogoutButton } from "@/components/LogoutButton";
 import { readCollection } from "@/lib/db";
 import type { User } from "@/lib/types";
 
 const DASHBOARD_REFRESH_INTERVAL_MS: Record<User["role"], number> = {
-  SALES_AGENT: 120000,
-  MANAGER: 60000,
-  ACCOUNTING: 60000,
-  BATCHER: 60000,
-  MIX_DESIGN: 60000,
-  PRODUCTION_MANAGER: 60000,
+  SALES_AGENT: 300000,
+  MANAGER: 300000,
+  ACCOUNTING: 300000,
+  BATCHER: 300000,
+  MIX_DESIGN: 300000,
+  PRODUCTION_MANAGER: 300000,
 };
 
 function getRefreshIntervalMs(role: User["role"]) {
@@ -83,7 +83,7 @@ export async function AppShell({
           <span className="status-badge status-open-good">{user.name}</span>
           <span className="status-badge status-talks">Employee ID {user.employeeId}</span>
           <span className="status-badge status-awaiting_confirmation">{toIndiaTimeLabel(new Date().toISOString())}</span>
-          {refreshIntervalMs > 0 ? <DashboardAutoRefresh intervalMs={refreshIntervalMs} /> : null}
+          <DashboardSyncControls autoRefreshIntervalMs={refreshIntervalMs} />
           {loginDisabled ? <span className="status-badge status-manager_view">Login disabled for testing</span> : null}
         </div>
       </section>

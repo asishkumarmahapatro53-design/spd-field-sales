@@ -2459,8 +2459,17 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
   };
 }
 
-async function getAgentScopedDashboardDatabase(user: User) {
+export type AgentDashboardHistoryScope = "recent" | "full";
+
+interface AgentDashboardReadOptions {
+  historyScope?: AgentDashboardHistoryScope;
+  recentDays?: number;
+}
+
+async function getAgentScopedDashboardDatabase(user: User, options: AgentDashboardReadOptions = {}) {
   const monthKey = toMonthKey(nowIso());
+  const historyScope = options.historyScope ?? "recent";
+  const recentCutoff = getRecentDateKey(options.recentDays ?? 2);
   const [workdaySessions, leads, approvals, informalQuotationRequests, salesOrderRequests, tasks, reimbursementClaims, targets, helpRequests] =
     await Promise.all([
       readCollection("workdaySessions", { filters: [{ field: "userId", op: "==", value: user.id }] }),
@@ -2473,7 +2482,9 @@ async function getAgentScopedDashboardDatabase(user: User) {
       readCollection("targets", { filters: [{ field: "userId", op: "==", value: user.id }] }),
       readCollection("helpRequests", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
     ]);
-  const sessionIds = workdaySessions.map((entry) => entry.id);
+  const visibleSessions =
+    historyScope === "full" ? workdaySessions : workdaySessions.filter((entry) => entry.date >= recentCutoff);
+  const sessionIds = visibleSessions.map((entry) => entry.id);
   const leadIds = leads.map((entry) => entry.id);
   const [readings, siteVisits, leadSites] = await Promise.all([
     readCollectionByFieldValues("odometerReadings", "sessionId", sessionIds),
@@ -2483,7 +2494,7 @@ async function getAgentScopedDashboardDatabase(user: User) {
 
   return createDashboardDatabaseSlice({
     users: [user],
-    workdaySessions,
+    workdaySessions: visibleSessions,
     leads,
     approvalRequests: approvals,
     informalQuotationRequests,
@@ -2615,9 +2626,9 @@ async function getBatcherScopedDashboardDatabase(user: User) {
   });
 }
 
-export async function getAgentDashboardData(user: User): Promise<AgentDashboardData> {
+export async function getAgentDashboardData(user: User, options: AgentDashboardReadOptions = {}): Promise<AgentDashboardData> {
   assertRole(user, ["SALES_AGENT"]);
-  const database = await getAgentScopedDashboardDatabase(user);
+  const database = await getAgentScopedDashboardDatabase(user, options);
   const activeSession = getOpenSession(database, user.id) ?? null;
   const sessionIds = database.workdaySessions.filter((entry) => entry.userId === user.id).map((entry) => entry.id);
   const leads = sortLeads(database.leads.filter((entry) => entry.agentId === user.id));

@@ -56,6 +56,11 @@ function setDatabaseReadCache(database: Database) {
   };
 }
 
+function clearDatabaseReadCache() {
+  databaseReadCache = null;
+  databaseReadPromise = null;
+}
+
 function allowsEphemeralPersistence() {
   return process.env.ALLOW_EPHEMERAL_PERSISTENCE?.trim().toLowerCase() === "true";
 }
@@ -963,6 +968,104 @@ export async function readCollectionByFieldValues<K extends DatabaseCollectionNa
   }
 
   return [...byId.values()];
+}
+
+export async function upsertCollectionItem<K extends DatabaseCollectionName>(
+  collectionName: K,
+  item: DatabaseCollectionItem<K>,
+) {
+  const itemId = (item as { id?: string }).id;
+
+  if (!itemId) {
+    throw new Error(`Cannot upsert ${collectionName} item without an id.`);
+  }
+
+  if (hasFirebaseCredentialShape()) {
+    try {
+      const firestore = await getFirebaseFirestore();
+      await getCollectionRef(firestore, collectionName).doc(itemId).set(sanitizeFirestoreValue(item) as FirebaseFirestore.DocumentData);
+      clearDatabaseReadCache();
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase item upsert failed (${collectionName}/${itemId}): ${message}`);
+
+      if (!canUseLocalDatabaseFallback()) {
+        throw new Error(`Firebase item upsert failed (${collectionName}/${itemId}): ${message}`);
+      }
+    }
+  }
+
+  await updateDatabase((database) => {
+    const list = database[collectionName] as Array<DatabaseCollectionItem<K>>;
+    const index = list.findIndex((entry) => (entry as { id?: string }).id === itemId);
+
+    if (index >= 0) {
+      list[index] = item;
+    } else {
+      list.push(item);
+    }
+  });
+}
+
+export async function patchCollectionItem<K extends DatabaseCollectionName>(
+  collectionName: K,
+  itemId: string,
+  patch: Partial<DatabaseCollectionItem<K>>,
+) {
+  if (hasFirebaseCredentialShape()) {
+    try {
+      const firestore = await getFirebaseFirestore();
+      await getCollectionRef(firestore, collectionName).doc(itemId).set(sanitizeFirestoreValue(patch), { merge: true });
+      clearDatabaseReadCache();
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase item patch failed (${collectionName}/${itemId}): ${message}`);
+
+      if (!canUseLocalDatabaseFallback()) {
+        throw new Error(`Firebase item patch failed (${collectionName}/${itemId}): ${message}`);
+      }
+    }
+  }
+
+  await updateDatabase((database) => {
+    const list = database[collectionName] as Array<DatabaseCollectionItem<K>>;
+    const item = list.find((entry) => (entry as { id?: string }).id === itemId);
+
+    if (!item) {
+      throw new Error(`${collectionName} item not found.`);
+    }
+
+    Object.assign(item as object, patch);
+  });
+}
+
+export async function deleteCollectionItem<K extends DatabaseCollectionName>(collectionName: K, itemId: string) {
+  if (hasFirebaseCredentialShape()) {
+    try {
+      const firestore = await getFirebaseFirestore();
+      await getCollectionRef(firestore, collectionName).doc(itemId).delete();
+      clearDatabaseReadCache();
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase item delete failed (${collectionName}/${itemId}): ${message}`);
+
+      if (!canUseLocalDatabaseFallback()) {
+        throw new Error(`Firebase item delete failed (${collectionName}/${itemId}): ${message}`);
+      }
+    }
+  }
+
+  await updateDatabase((database) => {
+    const list = database[collectionName] as Array<DatabaseCollectionItem<K>>;
+    const index = list.findIndex((entry) => (entry as { id?: string }).id === itemId);
+
+    if (index >= 0) {
+      list.splice(index, 1);
+    }
+  });
 }
 
 async function syncAllToFirebase(database: Database) {

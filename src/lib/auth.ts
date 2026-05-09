@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
-import { readCollection, updateDatabase } from "@/lib/db";
+import { deleteCollectionItem, readCollection, upsertCollectionItem } from "@/lib/db";
 import { nowIso } from "@/lib/date";
 import { verifyPassword } from "@/lib/password";
 import type { User, UserRole } from "@/lib/types";
@@ -101,19 +101,15 @@ export async function loginWithEmployeeId(employeeId: string, password: string) 
   }
 
   const token = randomUUID();
+  const sessionId = randomUUID();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
 
-  await updateDatabase((draft) => {
-    draft.authSessions = draft.authSessions.filter(
-      (entry) => !(entry.userId === user.id && new Date(entry.expiresAt).getTime() < Date.now()),
-    );
-    draft.authSessions.push({
-      id: randomUUID(),
-      userId: user.id,
-      token,
-      createdAt: nowIso(),
-      expiresAt,
-    });
+  await upsertCollectionItem("authSessions", {
+    id: sessionId,
+    userId: user.id,
+    token,
+    createdAt: nowIso(),
+    expiresAt,
   });
 
   const cookieStore = await cookies();
@@ -133,9 +129,15 @@ export async function logoutCurrentUser() {
   const token = cookieStore.get(COOKIE_NAME)?.value;
 
   if (token) {
-    await updateDatabase((draft) => {
-      draft.authSessions = draft.authSessions.filter((entry) => entry.token !== token);
+    const authSessions = await readCollection("authSessions", {
+      filters: [{ field: "token", op: "==", value: token }],
+      limit: 1,
     });
+    const authSession = authSessions[0];
+
+    if (authSession) {
+      await deleteCollectionItem("authSessions", authSession.id);
+    }
   }
 
   cookieStore.delete(COOKIE_NAME);

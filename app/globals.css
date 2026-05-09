@@ -767,6 +767,165 @@ textarea {
   color: var(--success);
 }
 
+.dashboard-sync-controls {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dashboard-sync-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sync-chip {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(16, 35, 63, 0.12);
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--brand);
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(16, 35, 63, 0.08);
+}
+
+.sync-chip span {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 169, 31, 0.22);
+  color: #9a5b00;
+  font-size: 0.78rem;
+}
+
+.sync-chip strong {
+  min-width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #07172d;
+  color: #fff;
+  font-size: 0.76rem;
+}
+
+.sync-chip-primary {
+  background: #07172d;
+  color: #fff;
+}
+
+.sync-chip:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.notification-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 1200;
+  width: min(390px, calc(100vw - 28px));
+  padding: 14px;
+  border: 1px solid rgba(16, 35, 63, 0.12);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 28px 70px rgba(16, 35, 63, 0.22);
+}
+
+.notification-popover-header,
+.notification-popover-footer,
+.notification-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notification-popover-header {
+  margin-bottom: 12px;
+}
+
+.notification-popover-header div {
+  display: grid;
+  gap: 2px;
+}
+
+.notification-popover-header span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.notification-popover-header button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.notification-list {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-row {
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(16, 35, 63, 0.08);
+  color: inherit;
+  text-decoration: none;
+  background: rgba(248, 245, 239, 0.82);
+}
+
+.notification-row div {
+  display: grid;
+  gap: 3px;
+}
+
+.notification-row span {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.notification-popover-footer {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.history-scope-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(16, 35, 63, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 16px 32px rgba(16, 35, 63, 0.08);
+}
+
+.history-scope-bar div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.history-scope-bar span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .status-approved_for_order {
   background: rgba(15, 118, 110, 0.13);
   color: var(--success);
@@ -3094,6 +3253,26 @@ th {
   .agent-payment-grid,
   .agent-log-row {
     display: grid;
+  }
+
+  .dashboard-sync-controls,
+  .dashboard-sync-actions,
+  .history-scope-bar {
+    width: 100%;
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .sync-chip {
+    justify-content: center;
+  }
+
+  .notification-popover {
+    position: fixed;
+    top: 76px;
+    left: 14px;
+    right: 14px;
+    width: auto;
   }
 
   .agent-command-user {

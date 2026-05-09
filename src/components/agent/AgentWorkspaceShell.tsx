@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { DashboardAutoRefresh } from "@/components/DashboardAutoRefresh";
+import { DashboardSyncControls } from "@/components/DashboardSyncControls";
 import { DashboardSwitcher } from "@/components/DashboardSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -10,7 +10,7 @@ import { toIndiaTimeLabel } from "@/lib/date";
 import { readCollection } from "@/lib/db";
 import type { User, WorkdaySession } from "@/lib/types";
 
-const DEFAULT_AGENT_REFRESH_INTERVAL_MS = 120000;
+const DEFAULT_AGENT_REFRESH_INTERVAL_MS = 300000;
 
 function getAgentRefreshIntervalMs() {
   const configured = Number(process.env.DASHBOARD_AUTO_REFRESH_MS ?? "");
@@ -68,7 +68,7 @@ export async function AgentWorkspaceShell({
           <strong>SPD Command Center</strong>
         </div>
         <div className="agent-command-top-actions">
-          {refreshIntervalMs > 0 ? <DashboardAutoRefresh intervalMs={refreshIntervalMs} /> : null}
+          <DashboardSyncControls autoRefreshIntervalMs={refreshIntervalMs} compact />
           <div className="agent-command-user">
             <strong>{user.name}</strong>
             <span>Sales Agent</span>

@@ -25,25 +25,14 @@ export function DashboardAutoRefresh({ intervalMs }: { intervalMs: number }) {
     }
 
     const interval = window.setInterval(refresh, intervalMs);
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
-        refresh();
-      }
-    };
-
-    window.addEventListener("focus", refreshWhenVisible);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
-
     return () => {
       window.clearInterval(interval);
-      window.removeEventListener("focus", refreshWhenVisible);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [intervalMs, refresh]);
 
   return (
     <span className={`status-badge ${isPending ? "status-pending" : "status-open-good"}`}>
-      {isPending ? "Syncing..." : `Auto sync ${lastSyncedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`}
+      {isPending ? "Safety sync..." : `Safety sync ${lastSyncedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`}
     </span>
   );
 }
