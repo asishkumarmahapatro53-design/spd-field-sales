@@ -27,6 +27,7 @@ export default function GlobalError({
           </div>
         </div>
         {error.digest ? <p className="note-box">Error digest: {error.digest}</p> : null}
+        {error.message ? <p className="warning-box">Server message: {error.message}</p> : null}
         <button className="button-primary" type="button" onClick={reset}>
           Try again
         </button>

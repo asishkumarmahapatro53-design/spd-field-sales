@@ -12,7 +12,7 @@ import { getStakeholderLabel } from "@/lib/site-visit";
 const dataDir = process.env.NODE_ENV === "production" ? "/tmp/spd-data" : path.join(process.cwd(), "data");
 const dbPath = path.join(dataDir, "mock-db.json");
 const DEFAULT_PLANT_IDS = ["plant-a", "plant-b", "plant-c"] as const;
-const DEFAULT_DATABASE_READ_CACHE_MS = 2500;
+const DEFAULT_DATABASE_READ_CACHE_MS = 60000;
 
 let databaseReadCache: { database: Database; expiresAt: number } | null = null;
 let databaseReadPromise: Promise<Database> | null = null;
@@ -28,6 +28,14 @@ function cloneDatabase(database: Database): Database {
 
 function getCachedDatabase() {
   if (!databaseReadCache || databaseReadCache.expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return cloneDatabase(databaseReadCache.database);
+}
+
+function getStaleCachedDatabase() {
+  if (!databaseReadCache) {
     return null;
   }
 
@@ -977,6 +985,13 @@ async function readDatabaseFresh(): Promise<Database> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Firebase read failed: ${message}`);
+      const staleDatabase = getStaleCachedDatabase();
+
+      if (staleDatabase) {
+        console.warn("Serving stale in-memory database cache after Firebase read failure.");
+        return staleDatabase;
+      }
+
       if (!canUseLocalDatabaseFallback()) {
         requireDurableDatabase("Firebase read failed");
       }
