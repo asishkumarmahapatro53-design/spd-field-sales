@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser, requireNumber, requireString } from "@/lib/api";
 import { nowIso } from "@/lib/date";
-import { readDatabase, updateDatabase } from "@/lib/db";
+import { readCollection, updateDatabase } from "@/lib/db";
 import type { CommissionVoucher } from "@/lib/types";
 
 export async function GET(request: Request) {
@@ -10,12 +10,9 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const plantId = searchParams.get("plantId");
 
-    const db = await readDatabase();
-    let vouchers = db.commissionVouchers ?? [];
-
-    if (plantId) {
-      vouchers = vouchers.filter((v) => v.plantId === plantId);
-    }
+    let vouchers = plantId
+      ? await readCollection("commissionVouchers", { filters: [{ field: "plantId", op: "==", value: plantId }] })
+      : await readCollection("commissionVouchers");
 
     // Sort newest first
     vouchers = vouchers.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

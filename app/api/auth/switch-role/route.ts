@@ -1,6 +1,6 @@
 import { ApiError, jsonError, jsonOk } from "@/lib/api";
 import { getDashboardPathForRole, isLoginDisabled, setDemoRole, SWITCHABLE_ROLES } from "@/lib/auth";
-import { readDatabase } from "@/lib/db";
+import { readCollection } from "@/lib/db";
 import type { UserRole } from "@/lib/types";
 
 export async function POST(request: Request) {
@@ -18,8 +18,11 @@ export async function POST(request: Request) {
     }
 
     if (userId) {
-      const database = await readDatabase();
-      const user = database.users.find((entry) => entry.id === userId && entry.role === role && entry.status === "ACTIVE");
+      const users = await readCollection("users", {
+        filters: [{ field: "id", op: "==", value: userId }],
+        limit: 1,
+      });
+      const user = users.find((entry) => entry.role === role && entry.status === "ACTIVE");
 
       if (!user) {
         throw new ApiError(400, "Selected dashboard user is not available.");

@@ -7,7 +7,7 @@ import { AiAssistant } from "@/components/agent/AiAssistant";
 import { AgentSidebar, type AgentNavKey } from "@/components/agent/AgentSidebar";
 import { isLoginDisabled } from "@/lib/auth";
 import { toIndiaTimeLabel } from "@/lib/date";
-import { readDatabase } from "@/lib/db";
+import { readCollection } from "@/lib/db";
 import type { User, WorkdaySession } from "@/lib/types";
 
 const DEFAULT_AGENT_REFRESH_INTERVAL_MS = 120000;
@@ -42,7 +42,7 @@ export async function AgentWorkspaceShell({
   const loginDisabled = isLoginDisabled();
   const refreshIntervalMs = getAgentRefreshIntervalMs();
   const switchUsers = loginDisabled
-    ? (await readDatabase()).users
+    ? (await readCollection("users"))
         .filter((entry) => entry.status === "ACTIVE")
         .map((entry) => ({
           id: entry.id,

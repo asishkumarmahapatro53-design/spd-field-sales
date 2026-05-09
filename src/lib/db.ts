@@ -853,6 +853,107 @@ const COLLECTION_NAMES = [
   "commissionVouchers",
 ] as const;
 
+export type DatabaseCollectionName = (typeof COLLECTION_NAMES)[number];
+type DatabaseCollectionItem<K extends DatabaseCollectionName> = Database[K] extends Array<infer Item> ? Item : never;
+
+interface FirestoreCollectionFilter {
+  field: string;
+  op: FirebaseFirestore.WhereFilterOp;
+  value: unknown;
+}
+
+interface FirestoreCollectionOrder {
+  field: string;
+  direction?: FirebaseFirestore.OrderByDirection;
+}
+
+interface FirestoreCollectionReadOptions {
+  filters?: FirestoreCollectionFilter[];
+  orderBy?: FirestoreCollectionOrder[];
+  limit?: number;
+}
+
+function getCollectionRef(firestore: FirebaseFirestore.Firestore, collectionName: DatabaseCollectionName) {
+  return firestore.collection(getFirebaseRootPath()).doc("collections").collection(collectionName);
+}
+
+async function readFirebaseCollection<K extends DatabaseCollectionName>(
+  collectionName: K,
+  options: FirestoreCollectionReadOptions = {},
+): Promise<Array<DatabaseCollectionItem<K>>> {
+  const firestore = await getFirebaseFirestore();
+  let query: FirebaseFirestore.Query = getCollectionRef(firestore, collectionName);
+
+  for (const filter of options.filters ?? []) {
+    query = query.where(filter.field, filter.op, filter.value);
+  }
+
+  for (const order of options.orderBy ?? []) {
+    query = query.orderBy(order.field, order.direction ?? "asc");
+  }
+
+  if (options.limit && options.limit > 0) {
+    query = query.limit(options.limit);
+  }
+
+  const snap = await query.get();
+  return snap.docs.map((doc) => doc.data() as DatabaseCollectionItem<K>);
+}
+
+export async function readCollection<K extends DatabaseCollectionName>(
+  collectionName: K,
+  options: FirestoreCollectionReadOptions = {},
+): Promise<Array<DatabaseCollectionItem<K>>> {
+  if (hasFirebaseCredentialShape()) {
+    try {
+      return await readFirebaseCollection(collectionName, options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Firebase collection read failed (${collectionName}): ${message}`);
+
+      if (!canUseLocalDatabaseFallback()) {
+        throw new Error(`Firebase collection read failed (${collectionName}): ${message}`);
+      }
+    }
+  }
+
+  const database = await readDatabase();
+  return [...((database[collectionName] || []) as Array<DatabaseCollectionItem<K>>)];
+}
+
+export async function readCollectionByFieldValues<K extends DatabaseCollectionName>(
+  collectionName: K,
+  field: string,
+  values: string[],
+): Promise<Array<DatabaseCollectionItem<K>>> {
+  const uniqueValues = [...new Set(values.filter(Boolean))];
+
+  if (!uniqueValues.length) {
+    return [];
+  }
+
+  const chunks: string[][] = [];
+  for (let index = 0; index < uniqueValues.length; index += 30) {
+    chunks.push(uniqueValues.slice(index, index + 30));
+  }
+
+  const chunkResults = await Promise.all(
+    chunks.map((chunk) =>
+      readCollection(collectionName, {
+        filters: [{ field, op: "in", value: chunk }],
+      }),
+    ),
+  );
+  const byId = new Map<string, DatabaseCollectionItem<K>>();
+
+  for (const item of chunkResults.flat()) {
+    const id = (item as { id?: string }).id;
+    byId.set(id || `${field}:${byId.size}`, item);
+  }
+
+  return [...byId.values()];
+}
+
 async function syncAllToFirebase(database: Database) {
   const firestore = await getFirebaseFirestore();
   const rootCollection = getFirebaseRootPath();

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { requireUser } from "@/lib/auth";
 import { ApiError, jsonError, jsonOk } from "@/lib/api";
-import { readDatabase, updateDatabase } from "@/lib/db";
+import { readCollection, updateDatabase } from "@/lib/db";
 import { nowIso } from "@/lib/date";
 import type { MixDesign } from "@/lib/types";
 
@@ -12,12 +12,9 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const plantId = searchParams.get("plantId");
 
-    const db = await readDatabase();
-    let designs = db.mixDesigns ?? [];
-
-    if (plantId) {
-      designs = designs.filter((d) => d.plantId === plantId);
-    }
+    const designs = plantId
+      ? await readCollection("mixDesigns", { filters: [{ field: "plantId", op: "==", value: plantId }] })
+      : await readCollection("mixDesigns");
 
     // Only return the active (latest) version per grade per plant
     const latestMap = new Map<string, MixDesign>();
@@ -49,11 +46,12 @@ export async function POST(request: Request) {
       throw new ApiError(400, "plantId and grade are required.");
     }
 
-    const db = await readDatabase();
-
     // Find current max version for this grade + plant to increment
-    const existingVersions = (db.mixDesigns ?? [])
-      .filter((d) => d.plantId === body.plantId && d.grade === body.grade)
+    const existingDesigns = await readCollection("mixDesigns", {
+      filters: [{ field: "plantId", op: "==", value: body.plantId }],
+    });
+    const existingVersions = existingDesigns
+      .filter((d) => d.grade === body.grade)
       .map((d) => d.version);
     const nextVersion = existingVersions.length > 0 ? Math.max(...existingVersions) + 1 : 1;
 

@@ -1,5 +1,5 @@
 import { requireApiUser } from "@/lib/api";
-import { readDatabase } from "@/lib/db";
+import { readCollection, readCollectionByFieldValues } from "@/lib/db";
 import { callGeminiChat, type AgentContext, type ChatMessage } from "@/lib/ai-assistant";
 import { jsonError, jsonOk } from "@/lib/api";
 
@@ -16,16 +16,20 @@ export async function POST(request: Request) {
       return jsonError(new Error("Message is required."));
     }
 
-    // Load agent's live context to build the system prompt
-    const db = await readDatabase();
-
-    const leads = db.leads.filter((l) => l.agentId === user.id);
-    const leadSites = db.leadSites.filter((ls) =>
-      leads.some((l) => l.id === ls.leadId),
+    // Load only this agent's live context to avoid burning Firestore reads on unrelated records.
+    const [leads, salesOrderRequests, tasks] = await Promise.all([
+      readCollection("leads", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
+      readCollection("salesOrderRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
+      readCollection("tasks", { filters: [{ field: "assignedTo", op: "==", value: user.id }] }),
+    ]);
+    const leadSites = await readCollectionByFieldValues(
+      "leadSites",
+      "leadId",
+      leads.map((lead) => lead.id),
     );
-    const salesOrders = db.salesOrderRequests
-      .filter((o) => o.createdBy === user.id)
-      .slice(-10) // Last 10 for context window efficiency
+    const salesOrders = salesOrderRequests
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 10)
       .map((o) => ({
         id: o.id,
         siteName: o.siteName,
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
         quantity: o.quantity,
         status: o.status,
       }));
-    const tasks = db.tasks
+    const openTasks = tasks
       .filter((t) => t.assignedTo === user.id && t.status === "OPEN")
       .map((t) => ({ subject: t.subject, deadline: t.deadline }));
 
@@ -44,7 +48,7 @@ export async function POST(request: Request) {
       leadNames: leads.map((l) => l.siteName),
       siteNames: leadSites.map((ls) => ls.siteName),
       pendingOrders: salesOrders,
-      openTasks: tasks,
+      openTasks,
     };
 
     // Build full history including the new user message

@@ -5,7 +5,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { DashboardSwitcher } from "@/components/DashboardSwitcher";
 import { DashboardAutoRefresh } from "@/components/DashboardAutoRefresh";
 import { LogoutButton } from "@/components/LogoutButton";
-import { readDatabase } from "@/lib/db";
+import { readCollection } from "@/lib/db";
 import type { User } from "@/lib/types";
 
 const DASHBOARD_REFRESH_INTERVAL_MS: Record<User["role"], number> = {
@@ -49,7 +49,7 @@ export async function AppShell({
   const loginDisabled = isLoginDisabled();
   const refreshIntervalMs = autoRefreshIntervalMs ?? getRefreshIntervalMs(user.role);
   const switchUsers = loginDisabled
-    ? (await readDatabase()).users
+    ? (await readCollection("users"))
         .filter((entry) => entry.status === "ACTIVE")
         .map((entry) => ({
           id: entry.id,

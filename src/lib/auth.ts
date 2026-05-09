@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
-import { readDatabase, updateDatabase } from "@/lib/db";
+import { readCollection, updateDatabase } from "@/lib/db";
 import { nowIso } from "@/lib/date";
 import { verifyPassword } from "@/lib/password";
 import type { User, UserRole } from "@/lib/types";
@@ -52,8 +52,8 @@ async function getDemoUser() {
   const cookieStore = await cookies();
   const selectedRole = normalizeRole(cookieStore.get(DEMO_ROLE_COOKIE_NAME)?.value) ?? "SALES_AGENT";
   const selectedUserId = cookieStore.get(DEMO_USER_COOKIE_NAME)?.value;
-  const database = await readDatabase();
-  const selectedUser = database.users.find(
+  const users = await readCollection("users");
+  const selectedUser = users.find(
     (entry) => entry.id === selectedUserId && entry.role === selectedRole && entry.status === "ACTIVE",
   );
 
@@ -62,8 +62,8 @@ async function getDemoUser() {
   }
 
   return (
-    database.users.find((entry) => entry.role === selectedRole && entry.status === "ACTIVE") ??
-    database.users.find((entry) => entry.status === "ACTIVE") ??
+    users.find((entry) => entry.role === selectedRole && entry.status === "ACTIVE") ??
+    users.find((entry) => entry.status === "ACTIVE") ??
     null
   );
 }
@@ -90,8 +90,11 @@ export async function setDemoRole(role: UserRole, userId?: string | null) {
 }
 
 export async function loginWithEmployeeId(employeeId: string, password: string) {
-  const database = await readDatabase();
-  const user = database.users.find((entry) => entry.employeeId === employeeId && entry.status === "ACTIVE");
+  const users = await readCollection("users", {
+    filters: [{ field: "employeeId", op: "==", value: employeeId }],
+    limit: 1,
+  });
+  const user = users.find((entry) => entry.employeeId === employeeId && entry.status === "ACTIVE");
 
   if (!user || !verifyPassword(password, user.passwordHash)) {
     return null;
@@ -152,8 +155,11 @@ export async function getCurrentUser(): Promise<User | null> {
     return null;
   }
 
-  const database = await readDatabase();
-  const authSession = database.authSessions.find(
+  const authSessions = await readCollection("authSessions", {
+    filters: [{ field: "token", op: "==", value: token }],
+    limit: 1,
+  });
+  const authSession = authSessions.find(
     (entry) => entry.token === token && new Date(entry.expiresAt).getTime() > Date.now(),
   );
 
@@ -161,7 +167,12 @@ export async function getCurrentUser(): Promise<User | null> {
     return null;
   }
 
-  return database.users.find((entry) => entry.id === authSession.userId) ?? null;
+  const users = await readCollection("users", {
+    filters: [{ field: "id", op: "==", value: authSession.userId }],
+    limit: 1,
+  });
+
+  return users[0] ?? null;
 }
 
 export async function requireUser(role?: UserRole) {

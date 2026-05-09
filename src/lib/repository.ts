@@ -10,7 +10,7 @@ import {
   requiresPoUpload,
 } from "@/lib/commercial";
 import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
-import { readDatabase, updateDatabase } from "@/lib/db";
+import { readCollection, readCollectionByFieldValues, readDatabase, updateDatabase } from "@/lib/db";
 import { sendGmail } from "@/lib/gmail-smtp";
 import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
 import { extractPanFromGstin, isValidGstin, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
@@ -1306,8 +1306,10 @@ async function prepareS3UploadedObject(uploadedObject: UploadedS3ObjectInput, ma
 }
 
 export async function listLeads(user: User) {
-  const database = await readDatabase();
-  const leads = user.role === "SALES_AGENT" ? database.leads.filter((entry) => entry.agentId === user.id) : database.leads;
+  const leads =
+    user.role === "SALES_AGENT"
+      ? await readCollection("leads", { filters: [{ field: "agentId", op: "==", value: user.id }] })
+      : await readCollection("leads", { limit: getDashboardCollectionLimit(1000) });
   return sortLeads(leads);
 }
 
@@ -2298,9 +2300,10 @@ export async function decideApprovalRequest(
 }
 
 export async function listVerificationQueue() {
-  const database = await readDatabase();
-  return database.odometerReadings
-    .filter((entry) => entry.status === "MANUAL_REVIEW_REQUIRED")
+  const readings = await readCollection("odometerReadings", {
+    filters: [{ field: "status", op: "==", value: "MANUAL_REVIEW_REQUIRED" }],
+  });
+  return readings
     .sort((left, right) => compareIsoAsc(right.capturedAt, left.capturedAt));
 }
 
@@ -2413,9 +2416,208 @@ export async function upsertTarget(user: User, agentId: string, month: string, q
   });
 }
 
+function getDashboardCollectionLimit(defaultValue: number) {
+  const configured = Number(process.env.DASHBOARD_COLLECTION_LIMIT ?? "");
+  return Number.isFinite(configured) && configured > 0 ? configured : defaultValue;
+}
+
+function getRecentDateKey(daysBack: number) {
+  return toDateKey(new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString());
+}
+
+function getRecentIso(daysBack: number) {
+  return new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function createDashboardDatabaseSlice(input: Partial<Database>): Database {
+  return {
+    users: [],
+    authSessions: [],
+    plants: [],
+    workdaySessions: [],
+    odometerReadings: [],
+    siteVisits: [],
+    leads: [],
+    leadSites: [],
+    approvalRequests: [],
+    informalQuotationRequests: [],
+    salesOrderRequests: [],
+    reimbursementClaims: [],
+    tasks: [],
+    helpRequests: [],
+    targets: [],
+    auditLogs: [],
+    fleetVehicles: [],
+    materialCostSnapshots: [],
+    priceBenchmarks: [],
+    customerAccounts: [],
+    customerInvoices: [],
+    mixDesigns: [],
+    dispatchRecords: [],
+    commissionVouchers: [],
+    ...input,
+  };
+}
+
+async function getAgentScopedDashboardDatabase(user: User) {
+  const monthKey = toMonthKey(nowIso());
+  const [workdaySessions, leads, approvals, informalQuotationRequests, salesOrderRequests, tasks, reimbursementClaims, targets, helpRequests] =
+    await Promise.all([
+      readCollection("workdaySessions", { filters: [{ field: "userId", op: "==", value: user.id }] }),
+      readCollection("leads", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
+      readCollection("approvalRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
+      readCollection("informalQuotationRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
+      readCollection("salesOrderRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
+      readCollection("tasks", { filters: [{ field: "assignedTo", op: "==", value: user.id }] }),
+      readCollection("reimbursementClaims", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
+      readCollection("targets", { filters: [{ field: "userId", op: "==", value: user.id }] }),
+      readCollection("helpRequests", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
+    ]);
+  const sessionIds = workdaySessions.map((entry) => entry.id);
+  const leadIds = leads.map((entry) => entry.id);
+  const [readings, siteVisits, leadSites] = await Promise.all([
+    readCollectionByFieldValues("odometerReadings", "sessionId", sessionIds),
+    readCollectionByFieldValues("siteVisits", "sessionId", sessionIds),
+    readCollectionByFieldValues("leadSites", "leadId", leadIds),
+  ]);
+
+  return createDashboardDatabaseSlice({
+    users: [user],
+    workdaySessions,
+    leads,
+    approvalRequests: approvals,
+    informalQuotationRequests,
+    salesOrderRequests,
+    tasks,
+    reimbursementClaims,
+    targets: targets.filter((entry) => entry.month === monthKey),
+    helpRequests,
+    odometerReadings: readings,
+    siteVisits,
+    leadSites,
+  });
+}
+
+async function getManagerScopedDashboardDatabase() {
+  const recentDateKey = getRecentDateKey(45);
+  const recentIso = getRecentIso(45);
+  const limit = getDashboardCollectionLimit(600);
+  const [
+    users,
+    plants,
+    workdaySessions,
+    verificationQueue,
+    siteVisits,
+    leads,
+    approvals,
+    informalQuotationRequests,
+    salesOrderRequests,
+    helpRequests,
+    tasks,
+    targets,
+    auditLogs,
+    fleetVehicles,
+    materialCostSnapshots,
+    priceBenchmarks,
+    customerAccounts,
+    customerInvoices,
+  ] = await Promise.all([
+    readCollection("users"),
+    readCollection("plants"),
+    readCollection("workdaySessions", { filters: [{ field: "date", op: ">=", value: recentDateKey }], limit }),
+    readCollection("odometerReadings", { filters: [{ field: "status", op: "==", value: "MANUAL_REVIEW_REQUIRED" }], limit }),
+    readCollection("siteVisits", { filters: [{ field: "visitedAt", op: ">=", value: recentIso }], limit }),
+    readCollection("leads", { limit }),
+    readCollection("approvalRequests", { limit }),
+    readCollection("informalQuotationRequests", { limit }),
+    readCollection("salesOrderRequests", { limit }),
+    readCollection("helpRequests", { limit }),
+    readCollection("tasks", { limit }),
+    readCollection("targets", { limit }),
+    readCollection("auditLogs", { orderBy: [{ field: "createdAt", direction: "desc" }], limit: 60 }),
+    readCollection("fleetVehicles"),
+    readCollection("materialCostSnapshots"),
+    readCollection("priceBenchmarks"),
+    readCollection("customerAccounts", { limit }),
+    readCollection("customerInvoices", { limit }),
+  ]);
+
+  return createDashboardDatabaseSlice({
+    users,
+    plants,
+    workdaySessions,
+    odometerReadings: verificationQueue,
+    siteVisits,
+    leads,
+    approvalRequests: approvals,
+    informalQuotationRequests,
+    salesOrderRequests,
+    helpRequests,
+    tasks,
+    targets,
+    auditLogs,
+    fleetVehicles,
+    materialCostSnapshots,
+    priceBenchmarks,
+    customerAccounts,
+    customerInvoices,
+  });
+}
+
+async function getAccountingScopedDashboardDatabase() {
+  const recentDateKey = getRecentDateKey(90);
+  const limit = getDashboardCollectionLimit(800);
+  const [users, plants, workdaySessions, reimbursementClaims, tasks, approvals, salesOrderRequests] = await Promise.all([
+    readCollection("users"),
+    readCollection("plants"),
+    readCollection("workdaySessions", { filters: [{ field: "date", op: ">=", value: recentDateKey }], limit }),
+    readCollection("reimbursementClaims", { limit }),
+    readCollection("tasks", { limit }),
+    readCollection("approvalRequests", { limit }),
+    readCollection("salesOrderRequests", { limit }),
+  ]);
+  const sessionIds = workdaySessions.map((entry) => entry.id);
+  const [readings, siteVisits] = await Promise.all([
+    readCollectionByFieldValues("odometerReadings", "sessionId", sessionIds),
+    readCollectionByFieldValues("siteVisits", "sessionId", sessionIds),
+  ]);
+
+  return createDashboardDatabaseSlice({
+    users,
+    plants,
+    workdaySessions,
+    odometerReadings: readings,
+    siteVisits,
+    reimbursementClaims,
+    tasks,
+    approvalRequests: approvals,
+    salesOrderRequests,
+  });
+}
+
+async function getBatcherScopedDashboardDatabase(user: User) {
+  const plantId = user.homePlantId;
+  const [plants, salesOrderRequests, mixDesigns, fleetVehicles, dispatchRecords] = await Promise.all([
+    readCollection("plants"),
+    plantId ? readCollection("salesOrderRequests", { filters: [{ field: "plantId", op: "==", value: plantId }] }) : Promise.resolve([]),
+    plantId ? readCollection("mixDesigns", { filters: [{ field: "plantId", op: "==", value: plantId }] }) : Promise.resolve([]),
+    plantId ? readCollection("fleetVehicles", { filters: [{ field: "plantId", op: "==", value: plantId }] }) : Promise.resolve([]),
+    plantId ? readCollection("dispatchRecords", { filters: [{ field: "plantId", op: "==", value: plantId }] }) : Promise.resolve([]),
+  ]);
+
+  return createDashboardDatabaseSlice({
+    users: [user],
+    plants,
+    salesOrderRequests,
+    mixDesigns,
+    fleetVehicles,
+    dispatchRecords,
+  });
+}
+
 export async function getAgentDashboardData(user: User): Promise<AgentDashboardData> {
   assertRole(user, ["SALES_AGENT"]);
-  const database = await readDatabase();
+  const database = await getAgentScopedDashboardDatabase(user);
   const activeSession = getOpenSession(database, user.id) ?? null;
   const sessionIds = database.workdaySessions.filter((entry) => entry.userId === user.id).map((entry) => entry.id);
   const leads = sortLeads(database.leads.filter((entry) => entry.agentId === user.id));
@@ -2463,13 +2665,16 @@ export async function getAgentDashboardData(user: User): Promise<AgentDashboardD
 
 export async function getManagerDashboardData(user: User): Promise<ManagerDashboardData> {
   assertRole(user, ["MANAGER", "PRODUCTION_MANAGER"]);
-  const database = await readDatabase();
+  const database = await getManagerScopedDashboardDatabase();
+  const verificationQueue = database.odometerReadings
+    .filter((entry) => entry.status === "MANUAL_REVIEW_REQUIRED")
+    .sort((left, right) => compareIsoAsc(right.capturedAt, left.capturedAt));
 
   return {
     user,
     plants: database.plants,
     odometerReadings: database.odometerReadings,
-    verificationQueue: await listVerificationQueue(),
+    verificationQueue,
     siteVisits: database.siteVisits,
     workdaySessions: database.workdaySessions,
     leads: sortLeads(database.leads),
@@ -2491,7 +2696,7 @@ export async function getManagerDashboardData(user: User): Promise<ManagerDashbo
 
 export async function getAccountingDashboardData(user: User): Promise<AccountingDashboardData> {
   assertRole(user, ["ACCOUNTING"]);
-  const database = await readDatabase();
+  const database = await getAccountingScopedDashboardDatabase();
 
   return {
     user,
@@ -2507,7 +2712,7 @@ export async function getAccountingDashboardData(user: User): Promise<Accounting
 
 export async function getBatcherDashboardData(user: User): Promise<BatcherDashboardData> {
   assertRole(user, ["BATCHER", "MANAGER"]);
-  const database = await readDatabase();
+  const database = await getBatcherScopedDashboardDatabase(user);
   const plantId = user.homePlantId;
   const plant = database.plants.find((p) => p.id === plantId) ?? null;
 
@@ -2595,6 +2800,6 @@ export async function exportReimbursements(format: "csv" | "xlsx") {
 }
 
 export async function listUsersByRole(role: User["role"]) {
-  const database = await readDatabase();
-  return database.users.filter((entry) => entry.role === role && entry.status === "ACTIVE");
+  const users = await readCollection("users", { filters: [{ field: "role", op: "==", value: role }] });
+  return users.filter((entry) => entry.status === "ACTIVE");
 }
