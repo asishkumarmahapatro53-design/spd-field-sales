@@ -9,13 +9,23 @@ import { readDatabase } from "@/lib/db";
 import type { User } from "@/lib/types";
 
 const DASHBOARD_REFRESH_INTERVAL_MS: Record<User["role"], number> = {
-  SALES_AGENT: 30000,
-  MANAGER: 15000,
-  ACCOUNTING: 15000,
-  BATCHER: 15000,
-  MIX_DESIGN: 20000,
-  PRODUCTION_MANAGER: 15000,
+  SALES_AGENT: 120000,
+  MANAGER: 60000,
+  ACCOUNTING: 60000,
+  BATCHER: 60000,
+  MIX_DESIGN: 60000,
+  PRODUCTION_MANAGER: 60000,
 };
+
+function getRefreshIntervalMs(role: User["role"]) {
+  const configured = Number(process.env.DASHBOARD_AUTO_REFRESH_MS ?? "");
+
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+
+  return DASHBOARD_REFRESH_INTERVAL_MS[role];
+}
 
 interface AppShellProps {
   user: User;
@@ -37,7 +47,7 @@ export async function AppShell({
   children,
 }: AppShellProps) {
   const loginDisabled = isLoginDisabled();
-  const refreshIntervalMs = autoRefreshIntervalMs ?? DASHBOARD_REFRESH_INTERVAL_MS[user.role];
+  const refreshIntervalMs = autoRefreshIntervalMs ?? getRefreshIntervalMs(user.role);
   const switchUsers = loginDisabled
     ? (await readDatabase()).users
         .filter((entry) => entry.status === "ACTIVE")

@@ -142,6 +142,16 @@ function getFirebaseCredential(env) {
 }
 
 async function checkFirebase(env, results) {
+  if (env.PREFLIGHT_SKIP_FIREBASE?.trim().toLowerCase() === "true") {
+    record(
+      results,
+      "warn",
+      "firebase",
+      "Firebase validation was skipped by PREFLIGHT_SKIP_FIREBASE. Use only as an emergency bypass when deploying a quota-saving fix.",
+    );
+    return;
+  }
+
   let app;
 
   try {
@@ -321,27 +331,46 @@ async function checkGemini(env, results) {
     return;
   }
 
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: "Reply with OK only." }] }],
-        generationConfig: {
-          maxOutputTokens: 8,
-          temperature: 0,
-        },
-      }),
-    });
+  const maxAttempts = 3;
 
-    if (!response.ok) {
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: "Reply with OK only." }] }],
+          generationConfig: {
+            maxOutputTokens: 8,
+            temperature: 0,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        record(results, "pass", "gemini", "Gemini API validation passed.", { model, attempt });
+        return;
+      }
+
+      const isTransient = response.status === 429 || response.status >= 500;
+      if (isTransient && attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
+        continue;
+      }
+
+      if (isTransient) {
+        record(results, "warn", "gemini", `Gemini API returned transient HTTP ${response.status}; deployment will continue.`, {
+          model,
+          attempts: attempt,
+        });
+        return;
+      }
+
       throw new Error(`Gemini API returned HTTP ${response.status}.`);
     }
-
-    record(results, "pass", "gemini", "Gemini API validation passed.", { model });
   } catch (error) {
     record(results, "fail", "gemini", sanitizeError(error), { model });
   }

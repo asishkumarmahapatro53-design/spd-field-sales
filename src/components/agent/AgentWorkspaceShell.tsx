@@ -10,7 +10,17 @@ import { toIndiaTimeLabel } from "@/lib/date";
 import { readDatabase } from "@/lib/db";
 import type { User, WorkdaySession } from "@/lib/types";
 
-const AGENT_REFRESH_INTERVAL_MS = 30000;
+const DEFAULT_AGENT_REFRESH_INTERVAL_MS = 120000;
+
+function getAgentRefreshIntervalMs() {
+  const configured = Number(process.env.DASHBOARD_AUTO_REFRESH_MS ?? "");
+
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+
+  return DEFAULT_AGENT_REFRESH_INTERVAL_MS;
+}
 
 interface AgentWorkspaceShellProps {
   user: User;
@@ -30,6 +40,7 @@ export async function AgentWorkspaceShell({
   children,
 }: AgentWorkspaceShellProps) {
   const loginDisabled = isLoginDisabled();
+  const refreshIntervalMs = getAgentRefreshIntervalMs();
   const switchUsers = loginDisabled
     ? (await readDatabase()).users
         .filter((entry) => entry.status === "ACTIVE")
@@ -57,7 +68,7 @@ export async function AgentWorkspaceShell({
           <strong>SPD Command Center</strong>
         </div>
         <div className="agent-command-top-actions">
-          <DashboardAutoRefresh intervalMs={AGENT_REFRESH_INTERVAL_MS} />
+          {refreshIntervalMs > 0 ? <DashboardAutoRefresh intervalMs={refreshIntervalMs} /> : null}
           <div className="agent-command-user">
             <strong>{user.name}</strong>
             <span>Sales Agent</span>
