@@ -12,6 +12,41 @@ import { getStakeholderLabel } from "@/lib/site-visit";
 const dataDir = process.env.NODE_ENV === "production" ? "/tmp/spd-data" : path.join(process.cwd(), "data");
 const dbPath = path.join(dataDir, "mock-db.json");
 const DEFAULT_PLANT_IDS = ["plant-a", "plant-b", "plant-c"] as const;
+const DEFAULT_DATABASE_READ_CACHE_MS = 2500;
+
+let databaseReadCache: { database: Database; expiresAt: number } | null = null;
+let databaseReadPromise: Promise<Database> | null = null;
+
+function getDatabaseReadCacheMs() {
+  const configured = Number(process.env.DATABASE_READ_CACHE_MS ?? DEFAULT_DATABASE_READ_CACHE_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_DATABASE_READ_CACHE_MS;
+}
+
+function cloneDatabase(database: Database): Database {
+  return structuredClone(database);
+}
+
+function getCachedDatabase() {
+  if (!databaseReadCache || databaseReadCache.expiresAt <= Date.now()) {
+    return null;
+  }
+
+  return cloneDatabase(databaseReadCache.database);
+}
+
+function setDatabaseReadCache(database: Database) {
+  const cacheMs = getDatabaseReadCacheMs();
+
+  if (cacheMs <= 0) {
+    databaseReadCache = null;
+    return;
+  }
+
+  databaseReadCache = {
+    database: cloneDatabase(database),
+    expiresAt: Date.now() + cacheMs,
+  };
+}
 
 function allowsEphemeralPersistence() {
   return process.env.ALLOW_EPHEMERAL_PERSISTENCE?.trim().toLowerCase() === "true";
@@ -933,10 +968,12 @@ async function ensureFirebaseCollections(): Promise<Database> {
   return normalizeDatabase(dbResult as Database);
 }
 
-export async function readDatabase(): Promise<Database> {
+async function readDatabaseFresh(): Promise<Database> {
   if (hasFirebaseCredentialShape()) {
     try {
-      return await ensureFirebaseCollections();
+      const database = await ensureFirebaseCollections();
+      setDatabaseReadCache(database);
+      return database;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Firebase read failed: ${message}`);
@@ -952,7 +989,22 @@ export async function readDatabase(): Promise<Database> {
 
   await ensureDatabaseFile();
   const content = await readFile(dbPath, "utf-8");
-  return normalizeDatabase(JSON.parse(content) as Database);
+  const database = normalizeDatabase(JSON.parse(content) as Database);
+  setDatabaseReadCache(database);
+  return database;
+}
+
+export async function readDatabase(): Promise<Database> {
+  const cachedDatabase = getCachedDatabase();
+  if (cachedDatabase) {
+    return cachedDatabase;
+  }
+
+  databaseReadPromise ??= readDatabaseFresh().finally(() => {
+    databaseReadPromise = null;
+  });
+
+  return cloneDatabase(await databaseReadPromise);
 }
 
 export async function writeDatabase(database: Database) {
@@ -960,6 +1012,7 @@ export async function writeDatabase(database: Database) {
     try {
       // Legacy support, updateDatabase should be used for granular diffs
       await syncAllToFirebase(database);
+      setDatabaseReadCache(database);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -976,6 +1029,7 @@ export async function writeDatabase(database: Database) {
 
   await ensureDatabaseFile();
   await writeFile(dbPath, JSON.stringify(database, null, 2), "utf-8");
+  setDatabaseReadCache(database);
 }
 
 export async function updateDatabase<T>(updater: (database: Database) => Promise<T> | T): Promise<T> {
@@ -1046,6 +1100,7 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
         await commitFirebaseBatch(batch, "update final batch");
       }
 
+      setDatabaseReadCache(database);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1063,5 +1118,6 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
   const database = await readDatabase();
   const result = await updater(database);
   await writeDatabase(database);
+  setDatabaseReadCache(database);
   return result;
 }
