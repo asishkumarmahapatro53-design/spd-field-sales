@@ -1,4 +1,4 @@
-export type UserRole = "SALES_AGENT" | "MANAGER" | "ACCOUNTING" | "BATCHER" | "MIX_DESIGN";
+export type UserRole = "SALES_AGENT" | "MANAGER" | "ACCOUNTING" | "BATCHER" | "MIX_DESIGN" | "PRODUCTION_MANAGER";
 export type UserStatus = "ACTIVE" | "INACTIVE";
 export type SessionStatus = "OPEN" | "CLOSED";
 export type PlantStatus = "ACTIVE" | "WATCH" | "MAINTENANCE";

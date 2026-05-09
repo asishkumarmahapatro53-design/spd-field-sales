@@ -85,9 +85,9 @@ export default async function ManagerPage() {
         />
         <ManagerWorkspaceCard
           eyebrow="Production schedule"
-          title="Schedule Requests"
+          title="Production Handoff"
           value={pendingOrders}
-          note="Review finance-cleared order slots in one dedicated workspace and approve or reject the production schedule."
+          note="Production approval now runs from the separate Production Manager dashboard."
           href="/manager/orders"
         />
         <ManagerWorkspaceCard

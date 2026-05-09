@@ -14,6 +14,8 @@ type SwitchUser = {
 const STAFF_OPTIONS: Array<{ role: UserRole; label: string; path: string }> = [
   { role: "MANAGER", label: "Manager", path: "/manager" },
   { role: "ACCOUNTING", label: "Accounting", path: "/accounting" },
+  { role: "PRODUCTION_MANAGER", label: "Production", path: "/production" },
+  { role: "BATCHER", label: "Batcher", path: "/batcher" },
   { role: "MIX_DESIGN", label: "Mix Design", path: "/mix-design" },
 ];
 

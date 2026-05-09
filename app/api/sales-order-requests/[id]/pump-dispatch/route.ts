@@ -3,7 +3,7 @@ import { updateSalesOrderPumpDispatch } from "@/lib/repository";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireApiUser(["MANAGER"]);
+    const user = await requireApiUser(["PRODUCTION_MANAGER"]);
     const body = (await request.json()) as {
       pumpDispatched?: boolean;
       pumpVehicleNumber?: string;

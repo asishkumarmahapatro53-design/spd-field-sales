@@ -10,7 +10,7 @@ const COOKIE_NAME = "spd_auth_token";
 const DEMO_ROLE_COOKIE_NAME = "spd_demo_role";
 const DEMO_USER_COOKIE_NAME = "spd_demo_user";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-export const SWITCHABLE_ROLES: UserRole[] = ["SALES_AGENT", "MANAGER", "ACCOUNTING", "MIX_DESIGN"];
+export const SWITCHABLE_ROLES: UserRole[] = ["SALES_AGENT", "MANAGER", "ACCOUNTING", "BATCHER", "MIX_DESIGN", "PRODUCTION_MANAGER"];
 
 export function isLoginDisabled() {
   return process.env.DISABLE_LOGIN === "true";
@@ -35,6 +35,10 @@ export function getDashboardPathForRole(role: UserRole) {
 
   if (role === "MIX_DESIGN") {
     return "/mix-design";
+  }
+
+  if (role === "PRODUCTION_MANAGER") {
+    return "/production";
   }
 
   if (role === "BATCHER") {

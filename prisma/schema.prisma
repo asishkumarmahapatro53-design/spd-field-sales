@@ -11,6 +11,9 @@ enum UserRole {
   SALES_AGENT
   MANAGER
   ACCOUNTING
+  BATCHER
+  MIX_DESIGN
+  PRODUCTION_MANAGER
 }
 
 enum UserStatus {

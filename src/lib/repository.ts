@@ -2144,7 +2144,7 @@ export async function decideSalesOrderSchedule(
   status: "SCHEDULE_APPROVED" | "SCHEDULE_REJECTED",
   note: string,
 ) {
-  assertRole(user, ["MANAGER"]);
+  assertRole(user, ["PRODUCTION_MANAGER"]);
 
   return updateDatabase((database) => {
     const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
@@ -2186,7 +2186,7 @@ export async function updateSalesOrderPumpDispatch(
     note: string;
   },
 ) {
-  assertRole(user, ["MANAGER"]);
+  assertRole(user, ["PRODUCTION_MANAGER"]);
 
   return updateDatabase((database) => {
     const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
@@ -2414,7 +2414,7 @@ export async function getAgentDashboardData(user: User): Promise<AgentDashboardD
 }
 
 export async function getManagerDashboardData(user: User): Promise<ManagerDashboardData> {
-  assertRole(user, ["MANAGER"]);
+  assertRole(user, ["MANAGER", "PRODUCTION_MANAGER"]);
   const database = await readDatabase();
 
   return {

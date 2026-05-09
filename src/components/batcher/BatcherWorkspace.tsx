@@ -20,7 +20,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
   const [documentMode, setDocumentMode] = useState<DispatchDocumentMode>("CHALLAN_ONLY");
   const [driverName, setDriverName] = useState("");
   const [driverPhone, setDriverPhone] = useState("");
-  
+
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -37,14 +37,14 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
   }, [invoiceModeAllowed]);
 
   // Determine active mix design for the selected order
-  const activeMixDesign = selectedOrder 
-    ? mixDesigns.find((m) => m.grade === selectedOrder.grade) 
+  const activeMixDesign = selectedOrder
+    ? mixDesigns.find((m) => m.grade === selectedOrder.grade)
     : null;
 
   async function handleDispatch() {
     setError("");
     setSuccess("");
-    
+
     if (!selectedOrder) {
       setError("Please select an order.");
       return;
@@ -92,7 +92,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
       setDocumentMode("CHALLAN_ONLY");
       setDriverName("");
       setDriverPhone("");
-      
+
       // We rely on router.refresh() in the page to fetch fresh data
       setTimeout(() => {
         window.location.reload();
@@ -167,7 +167,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
               ))}
             </select>
           </div>
-          
+
           <div className="field">
             <label>Select IDLE Truck</label>
             <select
@@ -241,14 +241,14 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
 
         {selectedOrder && !activeMixDesign && (
           <div className="note-box mt-16" style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" }}>
-            <strong>Missing Mix Design:</strong> There is no active Mix Design for grade <strong>{selectedOrder.grade}</strong>. 
+            <strong>Missing Mix Design:</strong> There is no active Mix Design for grade <strong>{selectedOrder.grade}</strong>.
             You cannot dispatch this order until QC configures the Mix Design in the Manager Dashboard.
           </div>
         )}
 
         <div className="button-row mt-24">
-          <button 
-            className="button" 
+          <button
+            className="button"
             onClick={handleDispatch}
             disabled={processing || !selectedOrderId || !selectedVehicleId || !dispatchQty || !activeMixDesign}
           >
@@ -300,7 +300,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                       <td>{d.dispatchedQuantityCum}</td>
                       <td>{getDocumentModeLabel(d.documentMode)}</td>
                       <td>{d.actualCastingType.toLowerCase()}</td>
-                      <td>{d.returnedQuantityCum > 0 ? <span style={{color: "#b91c1c"}}>{d.returnedQuantityCum}</span> : "-"}</td>
+                      <td>{d.returnedQuantityCum > 0 ? <span style={{ color: "#b91c1c" }}>{d.returnedQuantityCum}</span> : "-"}</td>
                       <td><strong>{d.finalSuppliedCum}</strong></td>
                       <td>
                         <span className={`status-badge ${d.status === "DISPATCHED" ? "status-pending" : "status-paid"}`}>

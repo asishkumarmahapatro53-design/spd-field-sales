@@ -60,6 +60,19 @@ function createMixDesignUserSeed(): User {
   };
 }
 
+function createProductionManagerUserSeed(): User {
+  return {
+    id: "user-production-manager-pm6001",
+    employeeId: "PM6001",
+    name: "Production Manager",
+    role: "PRODUCTION_MANAGER",
+    status: "ACTIVE",
+    homePlantId: null,
+    email: null,
+    passwordHash: hashPassword("password123"),
+  };
+}
+
 function createPlantSeeds() {
   return [
     {
@@ -309,12 +322,13 @@ function createSeedDatabase(): Database {
   const accounting = createUserSeed("AC3001", "Karan Gupta", "ACCOUNTING", "password123", null);
   const batcher = createUserSeed("BA4001", "Suresh Naik", "BATCHER", "password123", DEFAULT_PLANT_IDS[0]);
   const mixDesignUser = createMixDesignUserSeed();
+  const productionManager = createProductionManagerUserSeed();
   const now = nowIso();
   const today = toDateKey(now);
   const customerAccounts = createCustomerAccountSeeds();
 
   return {
-    users: [salesAgent, manager, accounting, batcher, mixDesignUser],
+    users: [salesAgent, manager, accounting, batcher, mixDesignUser, productionManager],
     authSessions: [],
     plants,
     workdaySessions: [],
@@ -462,6 +476,9 @@ function normalizeDatabase(rawDatabase: Database) {
   database.users ??= [];
   if (!database.users.some((entry) => entry.employeeId === "MD5001")) {
     database.users.push(createMixDesignUserSeed());
+  }
+  if (!database.users.some((entry) => entry.employeeId === "PM6001")) {
+    database.users.push(createProductionManagerUserSeed());
   }
   const fallbackPlantId = getFallbackPlantId(database as Database);
 

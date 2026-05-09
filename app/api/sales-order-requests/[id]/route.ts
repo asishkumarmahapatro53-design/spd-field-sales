@@ -3,7 +3,7 @@ import { jsonError, jsonOk, requireApiUser } from "@/lib/api";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireApiUser(["MANAGER"]);
+    const user = await requireApiUser(["PRODUCTION_MANAGER"]);
     const body = (await request.json()) as { status?: "SCHEDULE_APPROVED" | "SCHEDULE_REJECTED"; note?: string };
     const { id } = await context.params;
     const orderRequest = await decideSalesOrderSchedule(

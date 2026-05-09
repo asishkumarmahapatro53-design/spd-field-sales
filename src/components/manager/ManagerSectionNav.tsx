@@ -20,12 +20,6 @@ const MANAGER_SECTIONS = [
     note: "Commercial decisions",
   },
   {
-    key: "orders",
-    href: "/manager/orders",
-    label: "Schedules",
-    note: "Production approvals",
-  },
-  {
     key: "verifications",
     href: "/manager/verifications",
     label: "Verifications",

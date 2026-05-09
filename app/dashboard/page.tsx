@@ -24,5 +24,9 @@ export default async function DashboardPage() {
     redirect("/mix-design");
   }
 
+  if (user.role === "PRODUCTION_MANAGER") {
+    redirect("/production");
+  }
+
   redirect("/accounting");
 }
