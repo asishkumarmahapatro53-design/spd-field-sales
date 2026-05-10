@@ -9,7 +9,8 @@ import {
   requiresPoUpload,
 } from "@/lib/commercial";
 import { canUseInvoiceDocumentMode, extractPanFromGstin, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
-import type { ApprovalRequest, SalesOrderRequest } from "@/lib/types";
+import { findMixDesignForOrder, getDefaultMixDesignRecipe } from "@/lib/mix-design";
+import type { ApprovalRequest, MixDesign, SalesOrderRequest } from "@/lib/types";
 
 const approval: ApprovalRequest = {
   id: "approval-1",
@@ -107,6 +108,27 @@ const salesOrder: SalesOrderRequest = {
   createdAt: "2026-04-25T04:30:00.000Z",
 };
 
+const linkedMixDesign: MixDesign = {
+  id: "mix-linked",
+  plantId: "plant-a",
+  grade: "M25",
+  version: 1,
+  isActive: false,
+  mixDesignType: "DESIGN_MIX",
+  targetSlumpMm: 100,
+  cementKgPerCum: 330,
+  ggbsKgPerCum: 0,
+  flyAshKgPerCum: 50,
+  sandKgPerCum: 700,
+  aggregate10mmKgPerCum: 380,
+  aggregate20mmKgPerCum: 720,
+  admixtureKgPerCum: 1.1,
+  waterLitresPerCum: 165,
+  createdBy: "qc-1",
+  createdAt: "2026-04-25T05:30:00.000Z",
+  updatedAt: "2026-04-25T05:30:00.000Z",
+};
+
 describe("commercial workflow helpers", () => {
   it("forces normal payment types to advance terms", () => {
     expect(normalizePaymentTerms("NORMAL", "PO_AND_PDC")).toBe("ADVANCE");
@@ -140,5 +162,12 @@ describe("commercial workflow helpers", () => {
     expect(normalizeDispatchDocumentMode("CHALLAN_AND_GST_E_INVOICE", salesOrder)).toBe("CHALLAN_AND_GST_E_INVOICE");
     expect(normalizeDispatchDocumentMode("CHALLAN_AND_INVOICE", { ...salesOrder, gstin: null })).toBe("CHALLAN_ONLY");
     expect(normalizeDispatchDocumentMode("CHALLAN_AND_INVOICE", { ...salesOrder, gstVerificationStatus: "PENDING_ACCOUNTS" })).toBe("CHALLAN_ONLY");
+  });
+
+  it("creates sensible starter recipes and prefers the order-linked mix design", () => {
+    expect(getDefaultMixDesignRecipe("M25", "DESIGN_MIX").cementKgPerCum).toBeGreaterThan(0);
+    expect(getDefaultMixDesignRecipe("M25", "NOMINAL_MIX").flyAshKgPerCum).toBe(0);
+
+    expect(findMixDesignForOrder([linkedMixDesign], { ...salesOrder, mixDesignId: linkedMixDesign.id })).toBe(linkedMixDesign);
   });
 });

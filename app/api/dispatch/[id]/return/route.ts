@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser, requireNumber } from "@/lib/api";
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
+import { findMixDesignForOrder } from "@/lib/mix-design";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -28,12 +29,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         throw new Error("Returned quantity cannot exceed dispatched quantity.");
       }
 
-      const activeMixDesign = draft.mixDesigns?.find((m) => {
-        const order = draft.salesOrderRequests.find((o) => o.id === record.orderId);
-        return m.plantId === record.plantId && m.grade === order?.grade && m.isActive;
-      });
+      const order = draft.salesOrderRequests.find((o) => o.id === record.orderId);
+      if (!order) {
+        throw new Error("Linked sales order could not be found.");
+      }
 
-      if (!activeMixDesign) throw new Error(`Could not find active Mix Design to calculate theoretical reduction.`);
+      const activeMixDesign = findMixDesignForOrder(draft.mixDesigns ?? [], order);
+      if (!activeMixDesign) throw new Error(`Could not find linked or active Mix Design to calculate theoretical reduction.`);
 
       // Apply return
       record.returnedQuantityCum = returnedQuantityCum;
@@ -57,10 +59,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }
 
       // Add the returned amount back to the order's remaining quantity
-      const order = draft.salesOrderRequests.find((o) => o.id === record.orderId);
-      if (order) {
-        order.remainingQuantity += returnedQuantityCum;
-      }
+      order.remainingQuantity += returnedQuantityCum;
 
       // Audit Log
       draft.auditLogs.unshift({

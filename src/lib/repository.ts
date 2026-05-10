@@ -14,6 +14,7 @@ import { readCollection, readCollectionByFieldValues, readDatabase, updateDataba
 import { sendGmail } from "@/lib/gmail-smtp";
 import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
 import { extractPanFromGstin, isValidGstin, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
+import { findMixDesignForOrder, getDefaultMixDesignRecipe, parseSlumpMm } from "@/lib/mix-design";
 import { ocrService } from "@/lib/ocr";
 import { getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import { saveGeneratedBuffer } from "@/lib/storage";
@@ -37,6 +38,7 @@ import type {
   LeadSite,
   LeadStage,
   ManagerDashboardData,
+  MixDesign,
   MixDesignType,
   OdometerReading,
   PaymentTerms,
@@ -61,6 +63,50 @@ const ACCEPTED_OCR_READING_KINDS = new Set(["ODO", "TOTAL", "TRIP"]);
 const MAX_ODOMETER_STORED_BYTES = 2 * 1024 * 1024;
 const MAX_SITE_VISIT_STORED_BYTES = 5 * 1024 * 1024;
 const MAX_SITE_VISIT_VOICE_STORED_BYTES = 10 * 1024 * 1024;
+
+function ensureAutoMixDesignForSalesOrder(database: Database, request: SalesOrderRequest, actor: User) {
+  const existingDesign = findMixDesignForOrder(database.mixDesigns ?? [], request);
+  if (existingDesign) {
+    request.mixDesignId = existingDesign.id;
+    return { design: existingDesign, created: false };
+  }
+
+  const grade = request.grade.toUpperCase().trim();
+  const versions = (database.mixDesigns ?? [])
+    .filter((design) => design.plantId === request.plantId && design.grade === grade)
+    .map((design) => design.version);
+  const recipe = {
+    ...getDefaultMixDesignRecipe(grade, request.mixDesignType),
+    targetSlumpMm: parseSlumpMm(request.slump),
+  };
+  const now = nowIso();
+  const design: MixDesign = {
+    id: randomUUID(),
+    plantId: request.plantId,
+    grade,
+    version: versions.length ? Math.max(...versions) + 1 : 1,
+    isActive: true,
+    mixDesignType: request.mixDesignType,
+    ...recipe,
+    createdBy: actor.id,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  database.mixDesigns ??= [];
+  database.mixDesigns.push(design);
+  request.mixDesignId = design.id;
+  logAudit(
+    database,
+    actor,
+    "MixDesign",
+    design.id,
+    "AUTO_CREATE",
+    `Auto-created ${design.mixDesignType.replaceAll("_", " ").toLowerCase()} recipe for ${request.grade} at ${request.siteName}. QC can edit it before dispatch if required.`,
+  );
+
+  return { design, created: true };
+}
 
 function assertRole(user: User, allowed: User["role"][]) {
   if (!allowed.includes(user.role)) {
@@ -2105,6 +2151,7 @@ export async function createSalesOrderFromLedgerByAccounting(user: User, request
       throw new Error("Receiver name and phone number are required before creating the sales order.");
     }
 
+    const mixDesignResult = ensureAutoMixDesignForSalesOrder(database, request, user);
     const now = nowIso();
     request.scheduleDateTime = scheduleDateTime.toISOString();
     request.scheduleReceiverName = request.receiverName.trim();
@@ -2123,7 +2170,7 @@ export async function createSalesOrderFromLedgerByAccounting(user: User, request
       "SalesOrderRequest",
       request.id,
       "SALES_ORDER_CREATED",
-      request.scheduleNote,
+      `${request.scheduleNote} Mix design ${mixDesignResult.created ? "auto-created" : "linked"}: ${mixDesignResult.design.grade} v${mixDesignResult.design.version}.`,
     );
 
     return request;
@@ -2799,14 +2846,16 @@ export async function getBatcherDashboardData(user: User): Promise<BatcherDashbo
   const database = await getBatcherScopedDashboardDatabase(user);
   const plantId = user.homePlantId;
   const plant = database.plants.find((p) => p.id === plantId) ?? null;
+  const activeOrders = database.salesOrderRequests.filter(
+    (order) => order.plantId === plantId && order.status === "SCHEDULE_APPROVED" && order.remainingQuantity > 0,
+  );
+  const linkedMixDesignIds = new Set(activeOrders.map((order) => order.mixDesignId).filter((id): id is string => Boolean(id)));
 
   return {
     user,
     plant,
-    activeOrders: database.salesOrderRequests.filter(
-      (o) => o.plantId === plantId && o.status === "SCHEDULE_APPROVED" && o.remainingQuantity > 0
-    ),
-    mixDesigns: database.mixDesigns?.filter((m) => m.plantId === plantId && m.isActive) ?? [],
+    activeOrders,
+    mixDesigns: database.mixDesigns?.filter((design) => design.plantId === plantId && (design.isActive || linkedMixDesignIds.has(design.id))) ?? [],
     fleetVehicles: database.fleetVehicles.filter((v) => v.plantId === plantId),
     dispatchRecords: database.dispatchRecords?.filter((d) => d.plantId === plantId) ?? [],
   };

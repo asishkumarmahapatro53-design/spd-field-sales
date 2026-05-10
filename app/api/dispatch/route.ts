@@ -3,6 +3,7 @@ import { jsonError, jsonOk, requireApiUser, requireNumber, requireString } from 
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
 import { getNextChallanNumber, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
+import { findMixDesignForOrder } from "@/lib/mix-design";
 import type { DispatchRecord } from "@/lib/types";
 
 export async function POST(request: Request) {
@@ -41,8 +42,9 @@ export async function POST(request: Request) {
       if (!vehicle) throw new Error("Vehicle not found.");
       if (vehicle.status !== "IDLE") throw new Error("Vehicle is not IDLE.");
 
-      const activeMixDesign = draft.mixDesigns?.find((m) => m.plantId === plantId && m.grade === order.grade && m.isActive);
-      if (!activeMixDesign) throw new Error(`No active Mix Design found for grade ${order.grade} at this plant.`);
+      const activeMixDesign = findMixDesignForOrder(draft.mixDesigns ?? [], order);
+      if (!activeMixDesign) throw new Error(`No linked or active Mix Design found for grade ${order.grade} at this plant.`);
+      order.mixDesignId ??= activeMixDesign.id;
       const documentMode = normalizeDispatchDocumentMode(requestedDocumentMode, order);
       const invoiceStatus = documentMode === "CHALLAN_ONLY" ? "NOT_REQUESTED" : "REQUESTED";
       const challanNumber = getNextChallanNumber(draft.dispatchRecords?.map((record) => record.challanNumber) ?? []);

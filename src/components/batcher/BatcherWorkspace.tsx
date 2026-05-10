@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toIndiaTimeLabel } from "@/lib/date";
 import { canUseInvoiceDocumentMode, getDocumentModeLabel } from "@/lib/legal-workflow";
+import { findMixDesignForOrder } from "@/lib/mix-design";
 import type { DispatchDocumentMode, DispatchRecord, FleetVehicle, MixDesign, SalesOrderRequest } from "@/lib/types";
 
 interface BatcherWorkspaceProps {
@@ -36,10 +37,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
     }
   }, [invoiceModeAllowed]);
 
-  // Determine active mix design for the selected order
-  const activeMixDesign = selectedOrder
-    ? mixDesigns.find((m) => m.grade === selectedOrder.grade)
-    : null;
+  const activeMixDesign = selectedOrder ? findMixDesignForOrder(mixDesigns, selectedOrder) : null;
 
   async function handleDispatch() {
     setError("");
@@ -58,7 +56,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
       return;
     }
     if (!activeMixDesign) {
-      setError(`No active Mix Design found for grade ${selectedOrder.grade}. Please ask QC to create one.`);
+      setError(`No linked or active Mix Design found for grade ${selectedOrder.grade}. Please ask QC to create one.`);
       return;
     }
     if (dispatchQty > selectedOrder.remainingQuantity) {
@@ -241,8 +239,8 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
 
         {selectedOrder && !activeMixDesign && (
           <div className="note-box mt-16" style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" }}>
-            <strong>Missing Mix Design:</strong> There is no active Mix Design for grade <strong>{selectedOrder.grade}</strong>.
-            You cannot dispatch this order until QC configures the Mix Design in the Manager Dashboard.
+            <strong>Missing Mix Design:</strong> There is no linked or active Mix Design for grade <strong>{selectedOrder.grade}</strong>.
+            You cannot dispatch this order until QC configures the Mix Design in the Mix Design Dashboard.
           </div>
         )}
 
