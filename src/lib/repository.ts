@@ -2459,6 +2459,10 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
   };
 }
 
+function mergeById<T extends { id: string }>(items: T[]) {
+  return Array.from(new Map(items.map((item) => [item.id, item])).values());
+}
+
 export type AgentDashboardHistoryScope = "recent" | "full";
 export type AgentDashboardSection =
   | "leads"
@@ -2535,8 +2539,18 @@ async function getAgentScopedDashboardDatabase(user: User, options: AgentDashboa
         ? readCollection("helpRequests", { filters: [{ field: "agentId", op: "==", value: user.id }] })
         : Promise.resolve([]),
     ]);
+  const recentSessions = workdaySessions.filter((entry) => entry.date >= recentCutoff);
+  const claimedSessionIds = new Set(
+    reimbursementClaims
+      .filter((claim) => claim.status !== "REJECTED")
+      .flatMap((claim) => claim.lineItems.map((lineItem) => lineItem.sessionId)),
+  );
   const visibleSessions =
-    historyScope === "full" ? workdaySessions : workdaySessions.filter((entry) => entry.date >= recentCutoff);
+    historyScope === "full"
+      ? workdaySessions
+      : hasAgentDashboardSection(sectionSet, "reimbursements")
+        ? mergeById([...recentSessions, ...workdaySessions.filter((entry) => !claimedSessionIds.has(entry.id))])
+        : recentSessions;
   const sessionIds = needsSessionReads ? visibleSessions.map((entry) => entry.id) : [];
   const leadIds = leads.map((entry) => entry.id);
   const [readings, siteVisits, leadSites] = await Promise.all([
