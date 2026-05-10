@@ -7,7 +7,9 @@ import { getAgentDashboardData } from "@/lib/repository";
 
 export default async function AgentSiteVisitPage() {
   const user = await requireUser("SALES_AGENT");
-  const data = await getAgentDashboardData(user);
+  const data = await getAgentDashboardData(user, {
+    sections: ["leads", "leadSites", "siteVisits"],
+  });
 
   return (
     <AgentWorkspaceShell

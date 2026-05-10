@@ -16,7 +16,10 @@ export default async function AgentLogsPage({
   const user = await requireUser("SALES_AGENT");
   const params = await searchParams;
   const historyScope = params?.history === "full" ? "full" : "recent";
-  const data = await getAgentDashboardData(user, { historyScope });
+  const data = await getAgentDashboardData(user, {
+    historyScope,
+    sections: ["readings", "siteVisits", "reimbursements"],
+  });
 
   return (
     <AgentWorkspaceShell

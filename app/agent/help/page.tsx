@@ -7,7 +7,9 @@ import { getAgentDashboardData } from "@/lib/repository";
 
 export default async function AgentHelpPage() {
   const user = await requireUser("SALES_AGENT");
-  const data = await getAgentDashboardData(user);
+  const data = await getAgentDashboardData(user, {
+    sections: ["tasks"],
+  });
 
   return (
     <AgentWorkspaceShell

@@ -7,7 +7,9 @@ import { getAgentDashboardData } from "@/lib/repository";
 
 export default async function AgentOdometerPage() {
   const user = await requireUser("SALES_AGENT");
-  const data = await getAgentDashboardData(user);
+  const data = await getAgentDashboardData(user, {
+    sections: ["readings"],
+  });
 
   return (
     <AgentWorkspaceShell

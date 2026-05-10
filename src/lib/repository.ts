@@ -2460,36 +2460,95 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
 }
 
 export type AgentDashboardHistoryScope = "recent" | "full";
+export type AgentDashboardSection =
+  | "leads"
+  | "leadSites"
+  | "readings"
+  | "siteVisits"
+  | "approvals"
+  | "informalQuotations"
+  | "salesOrders"
+  | "tasks"
+  | "reimbursements"
+  | "targets"
+  | "helpRequests"
+  | "pipeline";
+
+const DEFAULT_AGENT_DASHBOARD_SECTIONS: AgentDashboardSection[] = [
+  "leads",
+  "leadSites",
+  "readings",
+  "siteVisits",
+  "approvals",
+  "informalQuotations",
+  "salesOrders",
+  "tasks",
+  "reimbursements",
+  "targets",
+  "helpRequests",
+  "pipeline",
+];
 
 interface AgentDashboardReadOptions {
   historyScope?: AgentDashboardHistoryScope;
   recentDays?: number;
+  sections?: AgentDashboardSection[];
+}
+
+function hasAgentDashboardSection(sectionSet: Set<AgentDashboardSection>, section: AgentDashboardSection) {
+  return sectionSet.has(section);
 }
 
 async function getAgentScopedDashboardDatabase(user: User, options: AgentDashboardReadOptions = {}) {
   const monthKey = toMonthKey(nowIso());
   const historyScope = options.historyScope ?? "recent";
   const recentCutoff = getRecentDateKey(options.recentDays ?? 2);
+  const sectionSet = new Set(options.sections ?? DEFAULT_AGENT_DASHBOARD_SECTIONS);
+  const needsLeads = hasAgentDashboardSection(sectionSet, "leads") || hasAgentDashboardSection(sectionSet, "leadSites");
+  const needsSessionReads =
+    hasAgentDashboardSection(sectionSet, "readings") ||
+    hasAgentDashboardSection(sectionSet, "siteVisits") ||
+    hasAgentDashboardSection(sectionSet, "reimbursements");
   const [workdaySessions, leads, approvals, informalQuotationRequests, salesOrderRequests, tasks, reimbursementClaims, targets, helpRequests] =
     await Promise.all([
       readCollection("workdaySessions", { filters: [{ field: "userId", op: "==", value: user.id }] }),
-      readCollection("leads", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
-      readCollection("approvalRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
-      readCollection("informalQuotationRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
-      readCollection("salesOrderRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] }),
-      readCollection("tasks", { filters: [{ field: "assignedTo", op: "==", value: user.id }] }),
-      readCollection("reimbursementClaims", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
-      readCollection("targets", { filters: [{ field: "userId", op: "==", value: user.id }] }),
-      readCollection("helpRequests", { filters: [{ field: "agentId", op: "==", value: user.id }] }),
+      needsLeads ? readCollection("leads", { filters: [{ field: "agentId", op: "==", value: user.id }] }) : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "approvals") || hasAgentDashboardSection(sectionSet, "pipeline")
+        ? readCollection("approvalRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] })
+        : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "informalQuotations")
+        ? readCollection("informalQuotationRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] })
+        : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "salesOrders")
+        ? readCollection("salesOrderRequests", { filters: [{ field: "createdBy", op: "==", value: user.id }] })
+        : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "tasks")
+        ? readCollection("tasks", { filters: [{ field: "assignedTo", op: "==", value: user.id }] })
+        : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "reimbursements")
+        ? readCollection("reimbursementClaims", { filters: [{ field: "agentId", op: "==", value: user.id }] })
+        : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "targets")
+        ? readCollection("targets", { filters: [{ field: "userId", op: "==", value: user.id }] })
+        : Promise.resolve([]),
+      hasAgentDashboardSection(sectionSet, "helpRequests")
+        ? readCollection("helpRequests", { filters: [{ field: "agentId", op: "==", value: user.id }] })
+        : Promise.resolve([]),
     ]);
   const visibleSessions =
     historyScope === "full" ? workdaySessions : workdaySessions.filter((entry) => entry.date >= recentCutoff);
-  const sessionIds = visibleSessions.map((entry) => entry.id);
+  const sessionIds = needsSessionReads ? visibleSessions.map((entry) => entry.id) : [];
   const leadIds = leads.map((entry) => entry.id);
   const [readings, siteVisits, leadSites] = await Promise.all([
-    readCollectionByFieldValues("odometerReadings", "sessionId", sessionIds),
-    readCollectionByFieldValues("siteVisits", "sessionId", sessionIds),
-    readCollectionByFieldValues("leadSites", "leadId", leadIds),
+    hasAgentDashboardSection(sectionSet, "readings") || hasAgentDashboardSection(sectionSet, "reimbursements")
+      ? readCollectionByFieldValues("odometerReadings", "sessionId", sessionIds)
+      : Promise.resolve([]),
+    hasAgentDashboardSection(sectionSet, "siteVisits") || hasAgentDashboardSection(sectionSet, "reimbursements")
+      ? readCollectionByFieldValues("siteVisits", "sessionId", sessionIds)
+      : Promise.resolve([]),
+    hasAgentDashboardSection(sectionSet, "leadSites")
+      ? readCollectionByFieldValues("leadSites", "leadId", leadIds)
+      : Promise.resolve([]),
   ]);
 
   return createDashboardDatabaseSlice({
