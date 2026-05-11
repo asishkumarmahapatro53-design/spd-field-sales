@@ -170,7 +170,6 @@ describe("commercial workflow helpers", () => {
 
     expect(findMixDesignForOrder([linkedMixDesign], { ...salesOrder, mixDesignId: linkedMixDesign.id })).toBe(linkedMixDesign);
   });
-
   it("allocates financial-year invoice numbers", () => {
     expect(getNextInvoiceNumber([], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00001");
     expect(getNextInvoiceNumber(["INV/26-27/00001"], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00002");
