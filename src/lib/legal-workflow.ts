@@ -67,3 +67,20 @@ export function getNextChallanNumber(existingNumbers: Array<string | null | unde
 
   return `${prefix}${String(nextSequence).padStart(5, "0")}`;
 }
+
+export function getNextInvoiceNumber(existingNumbers: Array<string | null | undefined>, date = new Date()) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const startYear = month >= 3 ? year : year - 1;
+  const endYear = startYear + 1;
+  const financialYear = `${String(startYear).slice(-2)}-${String(endYear).slice(-2)}`;
+  const prefix = `INV/${financialYear}/`;
+  const nextSequence =
+    existingNumbers
+      .filter((number): number is string => Boolean(number?.startsWith(prefix)))
+      .map((number) => Number(number.slice(prefix.length)))
+      .filter((sequence) => Number.isInteger(sequence) && sequence > 0)
+      .reduce((max, sequence) => Math.max(max, sequence), 0) + 1;
+
+  return `${prefix}${String(nextSequence).padStart(5, "0")}`;
+}

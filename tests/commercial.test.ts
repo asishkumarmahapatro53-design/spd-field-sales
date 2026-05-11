@@ -8,7 +8,7 @@ import {
   requiresPdcUpload,
   requiresPoUpload,
 } from "@/lib/commercial";
-import { canUseInvoiceDocumentMode, extractPanFromGstin, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
+import { canUseInvoiceDocumentMode, extractPanFromGstin, getNextInvoiceNumber, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
 import { findMixDesignForOrder, getDefaultMixDesignRecipe } from "@/lib/mix-design";
 import type { ApprovalRequest, MixDesign, SalesOrderRequest } from "@/lib/types";
 
@@ -169,5 +169,11 @@ describe("commercial workflow helpers", () => {
     expect(getDefaultMixDesignRecipe("M25", "NOMINAL_MIX").flyAshKgPerCum).toBe(0);
 
     expect(findMixDesignForOrder([linkedMixDesign], { ...salesOrder, mixDesignId: linkedMixDesign.id })).toBe(linkedMixDesign);
+  });
+
+  it("allocates financial-year invoice numbers", () => {
+    expect(getNextInvoiceNumber([], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00001");
+    expect(getNextInvoiceNumber(["INV/26-27/00001"], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00002");
+    expect(getNextInvoiceNumber(["INV/25-26/00009"], new Date("2026-04-01T04:30:00.000Z"))).toBe("INV/26-27/00001");
   });
 });

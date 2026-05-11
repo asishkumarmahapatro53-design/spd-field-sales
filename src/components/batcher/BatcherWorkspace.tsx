@@ -276,13 +276,14 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                 <th>Return (CUM)</th>
                 <th>Final (CUM)</th>
                 <th>Status</th>
+                <th>Invoice</th>
                 <th>Site</th>
               </tr>
             </thead>
             <tbody>
               {dispatchRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={{ textAlign: "center", padding: "20px", color: "var(--muted)" }}>
+                  <td colSpan={12} style={{ textAlign: "center", padding: "20px", color: "var(--muted)" }}>
                     No dispatches recorded today.
                   </td>
                 </tr>
@@ -304,6 +305,15 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                         <span className={`status-badge ${d.status === "DISPATCHED" ? "status-pending" : "status-paid"}`}>
                           {d.status}
                         </span>
+                      </td>
+                      <td>
+                        {d.documentMode === "CHALLAN_ONLY" ? (
+                          "-"
+                        ) : (
+                          <a className="button-ghost" href={`/dispatch/${d.id}/invoice`} target="_blank" rel="noopener noreferrer">
+                            Print invoice
+                          </a>
+                        )}
                       </td>
                       <td>
                         {d.status === "DISPATCHED" ? (

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser, requireNumber, requireString } from "@/lib/api";
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
-import { getNextChallanNumber, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
+import { getNextChallanNumber, getNextInvoiceNumber, normalizeDispatchDocumentMode } from "@/lib/legal-workflow";
 import { findMixDesignForOrder } from "@/lib/mix-design";
 import type { DispatchRecord } from "@/lib/types";
 
@@ -46,8 +46,12 @@ export async function POST(request: Request) {
       if (!activeMixDesign) throw new Error(`No linked or active Mix Design found for grade ${order.grade} at this plant.`);
       order.mixDesignId ??= activeMixDesign.id;
       const documentMode = normalizeDispatchDocumentMode(requestedDocumentMode, order);
-      const invoiceStatus = documentMode === "CHALLAN_ONLY" ? "NOT_REQUESTED" : "REQUESTED";
       const challanNumber = getNextChallanNumber(draft.dispatchRecords?.map((record) => record.challanNumber) ?? []);
+      const invoiceNumber =
+        documentMode === "CHALLAN_ONLY"
+          ? null
+          : getNextInvoiceNumber(draft.dispatchRecords?.map((record) => record.invoiceNumber) ?? []);
+      const invoiceStatus = documentMode === "CHALLAN_ONLY" ? "NOT_REQUESTED" : "POSTED";
 
       // 1. Reduce remaining quantity
       order.remainingQuantity -= dispatchedQuantityCum;
@@ -67,7 +71,7 @@ export async function POST(request: Request) {
         challanNumber,
         documentMode,
         invoiceStatus,
-        invoiceNumber: null,
+        invoiceNumber,
         eInvoiceIrn: null,
         actualCastingType: order.actualCastingType,
         gstin: order.gstin,
