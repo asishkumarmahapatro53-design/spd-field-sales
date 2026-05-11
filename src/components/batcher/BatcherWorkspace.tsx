@@ -293,7 +293,14 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                   return (
                     <tr key={d.id}>
                       <td>{toIndiaTimeLabel(d.dispatchedAt)}</td>
-                      <td>{d.challanNumber}</td>
+                      <td>
+                        <div className="dispatch-doc-links">
+                          <strong>{d.challanNumber}</strong>
+                          <a className="button-ghost button-sm" href={`/dispatch/${d.id}/challan`} target="_blank" rel="noopener noreferrer">
+                            Print challan
+                          </a>
+                        </div>
+                      </td>
                       <td><strong>{d.vehicleCode}</strong></td>
                       <td>{order?.grade || "N/A"}</td>
                       <td>{d.dispatchedQuantityCum}</td>

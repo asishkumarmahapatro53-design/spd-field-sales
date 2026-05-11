@@ -3484,6 +3484,33 @@ th {
   color: #374151;
 }
 
+.dispatch-doc-links {
+  display: inline-grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.data-table .button-sm {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.75rem;
+}
+
+.signature-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 42px;
+}
+
+.signature-grid span {
+  display: block;
+  padding-top: 34px;
+  border-top: 1px solid #111827;
+  color: #374151;
+  font-size: 0.85rem;
+}
+
 @media (max-width: 720px) {
   .invoice-print-shell {
     padding: 14px;
@@ -3516,6 +3543,10 @@ th {
 
   .invoice-lines {
     font-size: 0.86rem;
+  }
+
+  .signature-grid {
+    grid-template-columns: 1fr;
   }
 }
 

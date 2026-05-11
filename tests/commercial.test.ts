@@ -175,4 +175,11 @@ describe("commercial workflow helpers", () => {
     expect(getNextInvoiceNumber(["INV/26-27/00001"], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00002");
     expect(getNextInvoiceNumber(["INV/25-26/00009"], new Date("2026-04-01T04:30:00.000Z"))).toBe("INV/26-27/00001");
   });
+
+  it("creates sensible starter recipes and prefers the order-linked mix design", () => {
+    expect(getDefaultMixDesignRecipe("M25", "DESIGN_MIX").cementKgPerCum).toBeGreaterThan(0);
+    expect(getDefaultMixDesignRecipe("M25", "NOMINAL_MIX").flyAshKgPerCum).toBe(0);
+
+    expect(findMixDesignForOrder([linkedMixDesign], { ...salesOrder, mixDesignId: linkedMixDesign.id })).toBe(linkedMixDesign);
+  });
 });
