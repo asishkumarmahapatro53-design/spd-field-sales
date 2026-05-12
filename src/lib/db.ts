@@ -102,7 +102,7 @@ function createMixDesignUserSeed(): User {
     name: "Mix Design Engineer",
     role: "MIX_DESIGN",
     status: "ACTIVE",
-    homePlantId: null,
+    homePlantId: DEFAULT_PLANT_IDS[0],
     email: null,
     passwordHash: hashPassword("password123"),
   };
@@ -532,6 +532,9 @@ function normalizeDatabase(rawDatabase: Database) {
 
   (database.users ?? []).forEach((user) => {
     user.email ??= null;
+    if (user.role === "MIX_DESIGN" && !user.homePlantId) {
+      user.homePlantId = fallbackPlantId;
+    }
   });
 
   const salesAgents = (database.users ?? []).filter((entry) => entry.role === "SALES_AGENT");

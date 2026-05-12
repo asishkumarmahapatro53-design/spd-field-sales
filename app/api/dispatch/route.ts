@@ -40,7 +40,11 @@ export async function POST(request: Request) {
 
       const vehicle = draft.fleetVehicles.find((v) => v.id === vehicleId);
       if (!vehicle) throw new Error("Vehicle not found.");
+      if (vehicle.plantId !== plantId) throw new Error("Vehicle does not belong to this plant.");
       if (vehicle.status !== "IDLE") throw new Error("Vehicle is not IDLE.");
+      if (dispatchedQuantityCum > vehicle.capacityCum) {
+        throw new Error(`Cannot dispatch ${dispatchedQuantityCum} CUM. Vehicle capacity is ${vehicle.capacityCum} CUM.`);
+      }
 
       const activeMixDesign = findMixDesignForOrder(draft.mixDesigns ?? [], order);
       if (!activeMixDesign) throw new Error(`No linked or active Mix Design found for grade ${order.grade} at this plant.`);

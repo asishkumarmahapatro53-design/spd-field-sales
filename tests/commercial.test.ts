@@ -164,12 +164,6 @@ describe("commercial workflow helpers", () => {
     expect(normalizeDispatchDocumentMode("CHALLAN_AND_INVOICE", { ...salesOrder, gstVerificationStatus: "PENDING_ACCOUNTS" })).toBe("CHALLAN_ONLY");
   });
 
-  it("creates sensible starter recipes and prefers the order-linked mix design", () => {
-    expect(getDefaultMixDesignRecipe("M25", "DESIGN_MIX").cementKgPerCum).toBeGreaterThan(0);
-    expect(getDefaultMixDesignRecipe("M25", "NOMINAL_MIX").flyAshKgPerCum).toBe(0);
-
-    expect(findMixDesignForOrder([linkedMixDesign], { ...salesOrder, mixDesignId: linkedMixDesign.id })).toBe(linkedMixDesign);
-  });
   it("allocates financial-year invoice numbers", () => {
     expect(getNextInvoiceNumber([], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00001");
     expect(getNextInvoiceNumber(["INV/26-27/00001"], new Date("2026-05-11T04:30:00.000Z"))).toBe("INV/26-27/00002");

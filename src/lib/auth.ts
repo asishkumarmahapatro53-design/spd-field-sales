@@ -174,7 +174,7 @@ export async function getCurrentUser(): Promise<User | null> {
     limit: 1,
   });
 
-  return users[0] ?? null;
+  return users.find((entry) => entry.status === "ACTIVE") ?? null;
 }
 
 export async function requireUser(role?: UserRole) {

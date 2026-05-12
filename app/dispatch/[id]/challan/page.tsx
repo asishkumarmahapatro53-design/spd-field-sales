@@ -58,12 +58,26 @@ export default async function DispatchChallanPage({ params }: DispatchChallanPag
   }
 
   const backHref = user.role === "BATCHER" ? "/batcher" : getDashboardPathForRole(user.role);
+  const isRejected = dispatchRecord.status === "SITE_REJECTED";
+  const isReturnPendingAcceptance = dispatchRecord.status === "RETURNED";
+  const finalSuppliedCum = isRejected ? 0 : dispatchRecord.finalSuppliedCum;
 
   return (
     <main className="invoice-print-shell">
       <InvoicePrintActions backHref={backHref} printLabel="Print challan" />
 
       <section className="invoice-sheet">
+        {isRejected ? (
+          <div className="print-warning-banner">
+            Rejected dispatch. This challan is void for billing and should be retained only as an exception record.
+          </div>
+        ) : null}
+        {isReturnPendingAcceptance ? (
+          <div className="print-warning-banner is-caution">
+            Return load recorded. Site acceptance is still pending for the final supplied quantity.
+          </div>
+        ) : null}
+
         <header className="invoice-header">
           <div>
             <p className="invoice-kicker">Delivery challan</p>
@@ -128,7 +142,7 @@ export default async function DispatchChallanPage({ params }: DispatchChallanPag
               <td>{order.grade}</td>
               <td>{quantity(dispatchRecord.dispatchedQuantityCum)}</td>
               <td>{quantity(dispatchRecord.returnedQuantityCum)}</td>
-              <td>{quantity(dispatchRecord.finalSuppliedCum)}</td>
+              <td>{quantity(finalSuppliedCum)}</td>
             </tr>
           </tbody>
         </table>

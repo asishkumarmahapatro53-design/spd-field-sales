@@ -3484,6 +3484,21 @@ th {
   color: #374151;
 }
 
+.print-warning-banner {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid #b91c1c;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 700;
+}
+
+.print-warning-banner.is-caution {
+  border-color: #b45309;
+  background: #fffbeb;
+  color: #92400e;
+}
+
 .dispatch-doc-links {
   display: inline-grid;
   gap: 6px;

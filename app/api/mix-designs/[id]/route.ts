@@ -11,6 +11,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     if (!["MANAGER", "ACCOUNTING", "MIX_DESIGN"].includes(user.role)) {
       throw new ApiError(403, "Only Managers, Accounting, or Mix Design users can update Mix Designs.");
     }
+    if (user.role === "MIX_DESIGN" && !user.homePlantId) {
+      throw new ApiError(403, "Mix Design user is not assigned to a plant.");
+    }
 
     const { id } = await params;
     const body = (await request.json()) as Partial<MixDesign>;
@@ -22,6 +25,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       if (idx === -1) throw new ApiError(404, "Mix Design not found.");
 
       const existing = draft.mixDesigns[idx];
+      if (user.role === "MIX_DESIGN" && existing.plantId !== user.homePlantId) {
+        throw new ApiError(403, "You can only edit recipes for your own plant.");
+      }
+
       updatedDesign = {
         ...existing,
         mixDesignType: body.mixDesignType ?? existing.mixDesignType,

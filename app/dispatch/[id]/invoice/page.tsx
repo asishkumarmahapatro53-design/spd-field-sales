@@ -88,7 +88,9 @@ export default async function DispatchInvoicePage({ params }: DispatchInvoicePag
     );
   }
 
-  const suppliedQuantity = Math.max(0, dispatchRecord.finalSuppliedCum);
+  const isRejected = dispatchRecord.status === "SITE_REJECTED";
+  const isReturnPendingAcceptance = dispatchRecord.status === "RETURNED";
+  const suppliedQuantity = isRejected ? 0 : Math.max(0, dispatchRecord.finalSuppliedCum);
   const grossAmount = roundMoney(suppliedQuantity * order.approvedPrice);
   const taxableAmount = dispatchRecord.gstin ? roundMoney(grossAmount / (1 + GST_RATE)) : grossAmount;
   const cgstAmount = dispatchRecord.gstin ? roundMoney(taxableAmount * (GST_RATE / 2)) : 0;
@@ -104,6 +106,17 @@ export default async function DispatchInvoicePage({ params }: DispatchInvoicePag
       <InvoicePrintActions backHref={backHref} />
 
       <section className="invoice-sheet">
+        {isRejected ? (
+          <div className="print-warning-banner">
+            Rejected dispatch. This invoice is void and must not be billed to the customer.
+          </div>
+        ) : null}
+        {isReturnPendingAcceptance ? (
+          <div className="print-warning-banner is-caution">
+            Return load recorded. Verify site acceptance before treating this invoice as final.
+          </div>
+        ) : null}
+
         <header className="invoice-header">
           <div>
             <p className="invoice-kicker">{getDocumentModeLabel(dispatchRecord.documentMode)}</p>

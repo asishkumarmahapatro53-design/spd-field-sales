@@ -485,7 +485,7 @@ export interface DispatchRecord {
   // E-Way Bill data (populated after GSP API call)
   ewayBillNumber: string | null;
   ewayBillGeneratedAt: string | null;
-  // Material consumption (auto-calculated from MixDesign × finalSuppliedCum)
+  // Material consumption (auto-calculated from MixDesign x dispatchedQuantityCum)
   theoreticalCementKg: number | null;
   theoreticalGgbsKg: number | null;
   theoreticalFlyAshKg: number | null;

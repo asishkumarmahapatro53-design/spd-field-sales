@@ -8,9 +8,13 @@ import type { MixDesign } from "@/lib/types";
 /** GET /api/mix-designs?plantId=xxx — List all active mix designs (optionally filtered by plant) */
 export async function GET(request: Request) {
   try {
-    await requireUser();
+    const user = await requireUser();
     const { searchParams } = new URL(request.url);
-    const plantId = searchParams.get("plantId");
+    const requestedPlantId = searchParams.get("plantId");
+    if (user.role === "MIX_DESIGN" && !user.homePlantId) {
+      throw new ApiError(403, "Mix Design user is not assigned to a plant.");
+    }
+    const plantId = user.role === "MIX_DESIGN" ? user.homePlantId : requestedPlantId;
 
     const designs = plantId
       ? await readCollection("mixDesigns", { filters: [{ field: "plantId", op: "==", value: plantId }] })
@@ -44,6 +48,14 @@ export async function POST(request: Request) {
 
     if (!body.plantId || !body.grade) {
       throw new ApiError(400, "plantId and grade are required.");
+    }
+
+    if (user.role === "MIX_DESIGN" && !user.homePlantId) {
+      throw new ApiError(403, "Mix Design user is not assigned to a plant.");
+    }
+
+    if (user.role === "MIX_DESIGN" && body.plantId !== user.homePlantId) {
+      throw new ApiError(403, "You can only create recipes for your own plant.");
     }
 
     // Find current max version for this grade + plant to increment

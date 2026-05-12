@@ -18,11 +18,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (record.plantId !== user.homePlantId) {
         throw new Error("Unauthorized access to this dispatch record.");
       }
-      if (record.status !== "DISPATCHED") {
-        throw new Error("Only dispatched challans can be accepted or rejected.");
+      if (record.status !== "DISPATCHED" && record.status !== "RETURNED") {
+        throw new Error("Only dispatched or returned challans can be accepted or rejected.");
       }
 
       const now = nowIso();
+      const billableQuantityBeforeDecision = record.finalSuppliedCum;
       record.status = nextStatus;
       record.siteAcceptedAt = nextStatus === "SITE_ACCEPTED" ? now : null;
       record.siteRejectedAt = nextStatus === "SITE_REJECTED" ? now : null;
@@ -35,8 +36,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       if (nextStatus === "SITE_REJECTED") {
         const order = draft.salesOrderRequests.find((entry) => entry.id === record.orderId);
         if (order) {
-          order.remainingQuantity += record.dispatchedQuantityCum;
+          order.remainingQuantity += billableQuantityBeforeDecision;
         }
+        record.returnedQuantityCum = record.dispatchedQuantityCum;
+        record.finalSuppliedCum = 0;
       }
 
       draft.auditLogs.unshift({

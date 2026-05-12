@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser, requireNumber } from "@/lib/api";
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
-import { findMixDesignForOrder } from "@/lib/mix-design";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -25,6 +24,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         throw new Error(`Cannot process return load for a record with status: ${record.status}`);
       }
 
+      if (record.returnedQuantityCum > 0) {
+        throw new Error("A return has already been processed for this dispatch.");
+      }
+
       if (returnedQuantityCum > record.dispatchedQuantityCum) {
         throw new Error("Returned quantity cannot exceed dispatched quantity.");
       }
@@ -34,23 +37,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         throw new Error("Linked sales order could not be found.");
       }
 
-      const activeMixDesign = findMixDesignForOrder(draft.mixDesigns ?? [], order);
-      if (!activeMixDesign) throw new Error(`Could not find linked or active Mix Design to calculate theoretical reduction.`);
-
       // Apply return
       record.returnedQuantityCum = returnedQuantityCum;
       record.finalSuppliedCum = record.dispatchedQuantityCum - returnedQuantityCum;
       record.status = "RETURNED";
-
-      // Re-calculate theoretical values
-      record.theoreticalCementKg = (activeMixDesign.cementKgPerCum * record.finalSuppliedCum);
-      record.theoreticalGgbsKg = (activeMixDesign.ggbsKgPerCum * record.finalSuppliedCum);
-      record.theoreticalFlyAshKg = (activeMixDesign.flyAshKgPerCum * record.finalSuppliedCum);
-      record.theoreticalSandKg = (activeMixDesign.sandKgPerCum * record.finalSuppliedCum);
-      record.theoreticalAggregate10mmKg = (activeMixDesign.aggregate10mmKgPerCum * record.finalSuppliedCum);
-      record.theoreticalAggregate20mmKg = (activeMixDesign.aggregate20mmKgPerCum * record.finalSuppliedCum);
-      record.theoreticalAdmixtureKg = (activeMixDesign.admixtureKgPerCum * record.finalSuppliedCum);
-      record.theoreticalWaterLitres = (activeMixDesign.waterLitresPerCum * record.finalSuppliedCum);
 
       // Make truck IDLE again
       const vehicle = draft.fleetVehicles.find((v) => v.id === record.vehicleId);
