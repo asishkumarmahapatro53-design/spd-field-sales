@@ -259,6 +259,50 @@ export async function createPresignedS3PutUrl(input: {
   };
 }
 
+export async function createPresignedS3GetUrl(key: string, expiresInSeconds = 3600) {
+  const { bucket, region, accessKeyId, secretAccessKey, sessionToken } = getS3Config();
+  const now = new Date();
+  const amzDate = toAmzDate(now);
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const host = `${bucket}.s3.${region}.amazonaws.com`;
+  const signedHeaders = "host";
+  const credential = `${accessKeyId}/${scope}`;
+  
+  const query: Record<string, string> = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": credential,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expiresInSeconds),
+    "X-Amz-SignedHeaders": signedHeaders,
+  };
+
+  if (sessionToken) {
+    query["X-Amz-Security-Token"] = sessionToken;
+  }
+
+  const canonicalUri = `/${encodeS3Key(key)}`;
+  const canonicalQuery = buildCanonicalQuery(query);
+  const canonicalHeaders = `host:${host}\n`;
+  const canonicalRequest = [
+    "GET",
+    canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA256 of empty string
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    scope,
+    createHash("sha256").update(canonicalRequest).digest("hex"),
+  ].join("\n");
+  const signature = hmacHex(getSigningKey(secretAccessKey, dateStamp, region), stringToSign);
+
+  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
 export async function readS3ObjectBuffer(key: string, options?: { maxBytes?: number }) {
   const { bucket, client } = getS3Config();
   const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));

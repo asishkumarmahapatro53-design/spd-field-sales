@@ -62,7 +62,7 @@ function ReadingRow({ reading, busy, onConfirm, onReject }: ReadingRowProps) {
             {busy ? "Saving..." : "Send for review"}
           </button>
         ) : null}
-        <a className="button-ghost" href={reading.photoUrl} target="_blank" rel="noreferrer">
+        <a className="button-ghost" href={`/api/media?url=${encodeURIComponent(reading.photoUrl)}`} target="_blank" rel="noreferrer">
           View photo
         </a>
       </div>

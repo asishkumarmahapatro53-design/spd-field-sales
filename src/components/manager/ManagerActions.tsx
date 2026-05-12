@@ -78,7 +78,7 @@ export function VerificationCard({ verificationQueue }: { verificationQueue: Odo
             <form key={reading.id} className="data-row" action={() => undefined}>
               <div className="panel-header">
                 <h4>{reading.type} reading</h4>
-                <a className="button-ghost" href={reading.photoUrl} target="_blank" rel="noreferrer">
+                <a className="button-ghost" href={`/api/media?url=${encodeURIComponent(reading.photoUrl)}`} target="_blank" rel="noreferrer">
                   View photo
                 </a>
               </div>
