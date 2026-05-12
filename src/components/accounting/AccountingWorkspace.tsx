@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AccountingSalesOrderVerification } from "@/components/accounting/AccountingSalesOrderVerification";
 import { CommissionVoucherPanel } from "@/components/accounting/CommissionVoucherPanel";
+import { customerLedgerKey, findCustomerAccountByName, getLedgerCustomerNames, isLedgerReadySalesOrder } from "@/lib/customer-ledger";
 import { toIndiaTimeLabel } from "@/lib/date";
 import type { CustomerAccount, CustomerLedgerEntry, Plant, ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
 
@@ -402,7 +403,11 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
           <AccountingSalesOrderVerification requests={salesOrderRequests} />
         </section>
       ) : departmentId === "CUSTOMER_LEDGERS" ? (
-        <CustomerLedgerPanel customerAccounts={customerAccounts} customerLedgerEntries={customerLedgerEntries} />
+        <CustomerLedgerPanel
+          customerAccounts={customerAccounts}
+          customerLedgerEntries={customerLedgerEntries}
+          salesOrderRequests={salesOrderRequests}
+        />
       ) : departmentId === "COMMISSION" ? (
         <section className="accounting-section">
           <CommissionVoucherPanel plants={plants} />
@@ -441,9 +446,11 @@ function DepartmentPlaceholder({ departmentId }: { departmentId: Exclude<Departm
 function CustomerLedgerPanel({
   customerAccounts,
   customerLedgerEntries,
+  salesOrderRequests,
 }: {
   customerAccounts: CustomerAccount[];
   customerLedgerEntries: CustomerLedgerEntry[];
+  salesOrderRequests: SalesOrderRequest[];
 }) {
   const [search, setSearch] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState("");
@@ -453,19 +460,18 @@ function CustomerLedgerPanel({
   const router = useRouter();
   const [, startTransition] = useTransition();
 
-  // Build unique customer list from accounts + ledger entries
+  // Include legacy ledger-created orders so old production rows do not disappear from the ledger list.
   const customerNames = useMemo(() => {
-    const names = new Set<string>();
-    customerAccounts.forEach((account) => names.add(account.customerName));
-    customerLedgerEntries.forEach((entry) => names.add(entry.customerName));
-    return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [customerAccounts, customerLedgerEntries]);
+    return getLedgerCustomerNames({ customerAccounts, customerLedgerEntries, salesOrderRequests });
+  }, [customerAccounts, customerLedgerEntries, salesOrderRequests]);
 
   // Compute balance per customer
   const customerBalances = useMemo(() => {
     const map = new Map<string, number>();
     for (const name of customerNames) {
-      const entries = customerLedgerEntries.filter((entry) => entry.customerName === name);
+      const entries = customerLedgerEntries.filter(
+        (entry) => customerLedgerKey(entry.customerName) === customerLedgerKey(name),
+      );
       const balance = entries.reduce((sum, entry) => {
         return entry.type === "DEBIT" ? sum + entry.amount : sum - entry.amount;
       }, 0);
@@ -479,11 +485,12 @@ function CustomerLedgerPanel({
   );
 
   const selectedEntries = customerLedgerEntries.filter(
-    (entry) => entry.customerName === selectedCustomer,
+    (entry) => customerLedgerKey(entry.customerName) === customerLedgerKey(selectedCustomer),
   );
   const selectedBalance = customerBalances.get(selectedCustomer) ?? 0;
-  const selectedAccount = customerAccounts.find(
-    (account) => account.customerName === selectedCustomer,
+  const selectedAccount = findCustomerAccountByName(customerAccounts, selectedCustomer);
+  const selectedOrders = salesOrderRequests.filter(
+    (request) => isLedgerReadySalesOrder(request) && customerLedgerKey(request.customerName) === customerLedgerKey(selectedCustomer),
   );
 
   async function handleRecordPayment(event: React.FormEvent<HTMLFormElement>) {
@@ -619,7 +626,10 @@ function CustomerLedgerPanel({
                     </table>
                   </div>
                 ) : (
-                  <div className="note-box" style={{ marginTop: "12px" }}>No transactions yet for this customer.</div>
+                  <div className="note-box" style={{ marginTop: "12px" }}>
+                    No debit or credit transactions yet. The customer ledger is created; debit entries will appear after site-accepted dispatches, and credit entries will appear after recorded payments.
+                    {selectedOrders.length ? ` Linked orders: ${selectedOrders.map((order) => `${order.grade} ${numberValue(order.quantity)} CUM`).join(", ")}.` : ""}
+                  </div>
                 )}
               </div>
 

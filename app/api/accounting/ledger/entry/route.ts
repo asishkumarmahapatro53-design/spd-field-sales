@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser } from "@/lib/api";
+import {
+  createCustomerAccountFromSalesOrder,
+  customerLedgerKey,
+  findCustomerAccountByName,
+  isLedgerReadySalesOrder,
+} from "@/lib/customer-ledger";
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
 import type { LedgerPaymentMode } from "@/lib/types";
@@ -58,10 +64,18 @@ export async function POST(request: Request) {
         createdAt: now,
       });
 
-      // Update customer account outstanding amount if account exists
-      const account = draft.customerAccounts.find(
-        (entry) => entry.customerName === customerName,
-      );
+      draft.customerAccounts ??= [];
+      let account = findCustomerAccountByName(draft.customerAccounts, customerName);
+      if (!account) {
+        const matchingOrder = (draft.salesOrderRequests ?? []).find(
+          (order) => isLedgerReadySalesOrder(order) && customerLedgerKey(order.customerName) === customerLedgerKey(customerName),
+        );
+        if (matchingOrder) {
+          account = createCustomerAccountFromSalesOrder(randomUUID(), matchingOrder);
+          draft.customerAccounts.push(account);
+        }
+      }
+
       if (account) {
         account.outstandingAmount = Math.max(0, account.outstandingAmount - amount);
         account.lastPaymentAt = now;

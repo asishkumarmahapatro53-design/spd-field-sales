@@ -9,6 +9,7 @@ import {
   requiresPdcUpload,
   requiresPoUpload,
 } from "@/lib/commercial";
+import { createCustomerAccountFromSalesOrder, findCustomerAccountByName } from "@/lib/customer-ledger";
 import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
 import { readCollection, readCollectionByFieldValues, readDatabase, updateDatabase } from "@/lib/db";
 import { sendGmail } from "@/lib/gmail-smtp";
@@ -2115,6 +2116,24 @@ export async function reviewSalesOrderRequestByAccounting(
       request.gstVerificationStatus = "REJECTED";
       request.gstVerificationNote = note || "Accounts rejected the customer legal details.";
     }
+
+    if (status === "FINANCE_VERIFIED") {
+      database.customerAccounts ??= [];
+      const existingAccount = findCustomerAccountByName(database.customerAccounts, request.customerName);
+      if (!existingAccount) {
+        const account = createCustomerAccountFromSalesOrder(randomUUID(), request);
+        database.customerAccounts.push(account);
+        logAudit(
+          database,
+          user,
+          "CustomerAccount",
+          account.id,
+          "CREATE",
+          `Created customer ledger account for ${account.customerName}.`,
+        );
+      }
+    }
+
     logAudit(
       database,
       user,

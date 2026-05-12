@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser } from "@/lib/api";
+import { createCustomerAccountFromSalesOrder, findCustomerAccountByName } from "@/lib/customer-ledger";
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
 
@@ -73,10 +74,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
               createdAt: now,
             });
 
-            // Update customer account outstanding amount if account exists
-            const account = draft.customerAccounts.find(
-              (entry) => entry.customerName === customerName,
-            );
+            draft.customerAccounts ??= [];
+            let account = findCustomerAccountByName(draft.customerAccounts, customerName);
+            if (!account) {
+              account = createCustomerAccountFromSalesOrder(randomUUID(), order);
+              draft.customerAccounts.push(account);
+            }
+
             if (account) {
               account.outstandingAmount += debitAmount;
             }

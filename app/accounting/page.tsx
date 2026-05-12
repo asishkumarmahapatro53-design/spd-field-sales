@@ -2,6 +2,7 @@ import { AccountingWorkspace } from "@/components/accounting/AccountingWorkspace
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { requireUser } from "@/lib/auth";
+import { getLedgerCustomerNames } from "@/lib/customer-ledger";
 import { getAccountingDashboardData } from "@/lib/repository";
 
 export default async function AccountingPage() {
@@ -21,7 +22,11 @@ export default async function AccountingPage() {
     return sum + entry.totalAmount;
   }, 0);
 
-  const uniqueCustomerNames = new Set(data.customerLedgerEntries.map((entry) => entry.customerName));
+  const customerLedgerNames = getLedgerCustomerNames({
+    customerAccounts: data.customerAccounts,
+    customerLedgerEntries: data.customerLedgerEntries,
+    salesOrderRequests: data.salesOrderRequests,
+  });
   const customerLedgerBalance = data.customerLedgerEntries.reduce((sum, entry) => {
     return entry.type === "DEBIT" ? sum + entry.amount : sum - entry.amount;
   }, 0);
@@ -39,7 +44,7 @@ export default async function AccountingPage() {
         <MetricCard label="Ledger queue" value={pendingFinanceOrders} note="Sales requests waiting for ledger creation" />
         <MetricCard label="Outstanding amount" value={`₹${Math.round(totalOutstanding).toLocaleString("en-IN")}`} note="Unpaid verified reimbursements" />
         <MetricCard label="Paid claims" value={data.reimbursementClaims.filter((entry) => entry.status === "PAID").length} note="OTP verified payments" />
-        <MetricCard label="Customer ledgers" value={uniqueCustomerNames.size || data.customerAccounts.length} note="Active client accounts" />
+        <MetricCard label="Customer ledgers" value={customerLedgerNames.length} note="Active client accounts" />
         <MetricCard label="Customer outstanding" value={`₹${Math.round(Math.max(0, customerLedgerBalance)).toLocaleString("en-IN")}`} note="Total customer receivables" />
       </section>
 
