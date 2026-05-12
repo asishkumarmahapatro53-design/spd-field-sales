@@ -32,6 +32,8 @@ export type PumpDispatchStatus = "NOT_DISPATCHED" | "DISPATCHED";
 export type DispatchDocumentMode = "CHALLAN_ONLY" | "CHALLAN_AND_INVOICE" | "CHALLAN_AND_GST_E_INVOICE";
 export type DispatchInvoiceStatus = "NOT_REQUESTED" | "REQUESTED" | "POSTED" | "E_INVOICE_GENERATED";
 export type CommissionVoucherStatus = "DRAFT" | "APPROVED" | "EXPORTED_TO_TALLY";
+export type LedgerEntryType = "DEBIT" | "CREDIT";
+export type LedgerPaymentMode = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "AUTO_DISPATCH";
 export type CommissionRecipientType = "SALES_AGENT" | "THIRD_PARTY";
 export type RequestPriority = "NORMAL" | "URGENT";
 export type SalesOrderRequestStatus =
@@ -368,6 +370,20 @@ export interface CustomerInvoice {
   paidAt: string | null;
 }
 
+/** A single debit or credit entry in a customer's unified ledger. */
+export interface CustomerLedgerEntry {
+  id: string;
+  customerName: string;
+  type: LedgerEntryType;
+  amount: number;
+  runningBalance: number;
+  description: string;
+  referenceId: string | null;
+  paymentMode: LedgerPaymentMode;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface SalesOrderRequest {
   id: string;
   leadId: string;
@@ -586,6 +602,7 @@ export interface Database {
   mixDesigns: MixDesign[];
   dispatchRecords: DispatchRecord[];
   commissionVouchers: CommissionVoucher[];
+  customerLedgerEntries: CustomerLedgerEntry[];
 }
 
 export interface ReimbursementSummary {
@@ -659,6 +676,8 @@ export interface AccountingDashboardData {
   approvals: ApprovalRequest[];
   salesOrderRequests: SalesOrderRequest[];
   agents: User[];
+  customerAccounts: CustomerAccount[];
+  customerLedgerEntries: CustomerLedgerEntry[];
 }
 
 export interface BatcherDashboardData {

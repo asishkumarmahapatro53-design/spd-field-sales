@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import { AccountingSalesOrderVerification } from "@/components/accounting/AccountingSalesOrderVerification";
 import { CommissionVoucherPanel } from "@/components/accounting/CommissionVoucherPanel";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { Plant, ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
+import type { CustomerAccount, CustomerLedgerEntry, Plant, ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
 
-type DepartmentId = "SALES" | "PRODUCTION" | "HR" | "LABOR" | "COMMISSION";
+type DepartmentId = "SALES" | "PRODUCTION" | "HR" | "LABOR" | "COMMISSION" | "CUSTOMER_LEDGERS";
 
 const departments: Array<{ id: DepartmentId; label: string; scope: string }> = [
   { id: "SALES", label: "Sales Department", scope: "Agent fuel and lunch reimbursement" },
+  { id: "CUSTOMER_LEDGERS", label: "Customer Ledgers", scope: "Client-wise debit, credit, and balance tracking" },
   { id: "COMMISSION", label: "Commission & Vouchers", scope: "Third-party and agent commissions with Tally Export" },
   { id: "PRODUCTION", label: "Production Department", scope: "Food and plant support expenses" },
   { id: "HR", label: "HR Department", scope: "Staff payment and welfare requests" },
@@ -64,9 +65,11 @@ interface AccountingWorkspaceProps {
   reimbursements: ReimbursementSummary[];
   claims: ReimbursementClaim[];
   salesOrderRequests: SalesOrderRequest[];
+  customerAccounts: CustomerAccount[];
+  customerLedgerEntries: CustomerLedgerEntry[];
 }
 
-export function AccountingWorkspace({ agents, plants, reimbursements, claims, salesOrderRequests }: AccountingWorkspaceProps) {
+export function AccountingWorkspace({ agents, plants, reimbursements, claims, salesOrderRequests, customerAccounts, customerLedgerEntries }: AccountingWorkspaceProps) {
   const router = useRouter();
   const [departmentId, setDepartmentId] = useState<DepartmentId>("SALES");
   const [selectedAgentId, setSelectedAgentId] = useState(agents[0]?.id ?? "");
@@ -398,6 +401,8 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
 
           <AccountingSalesOrderVerification requests={salesOrderRequests} />
         </section>
+      ) : departmentId === "CUSTOMER_LEDGERS" ? (
+        <CustomerLedgerPanel customerAccounts={customerAccounts} customerLedgerEntries={customerLedgerEntries} />
       ) : departmentId === "COMMISSION" ? (
         <section className="accounting-section">
           <CommissionVoucherPanel plants={plants} />
@@ -428,6 +433,234 @@ function DepartmentPlaceholder({ departmentId }: { departmentId: Exclude<Departm
           Payment registers for {dept?.label.toLowerCase()} are being prepared for the next release phase.
           Use the <strong>Sales Department</strong> tab to access agent reimbursements.
         </p>
+      </div>
+    </section>
+  );
+}
+
+function CustomerLedgerPanel({
+  customerAccounts,
+  customerLedgerEntries,
+}: {
+  customerAccounts: CustomerAccount[];
+  customerLedgerEntries: CustomerLedgerEntry[];
+}) {
+  const [search, setSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+
+  // Build unique customer list from accounts + ledger entries
+  const customerNames = useMemo(() => {
+    const names = new Set<string>();
+    customerAccounts.forEach((account) => names.add(account.customerName));
+    customerLedgerEntries.forEach((entry) => names.add(entry.customerName));
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [customerAccounts, customerLedgerEntries]);
+
+  // Compute balance per customer
+  const customerBalances = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const name of customerNames) {
+      const entries = customerLedgerEntries.filter((entry) => entry.customerName === name);
+      const balance = entries.reduce((sum, entry) => {
+        return entry.type === "DEBIT" ? sum + entry.amount : sum - entry.amount;
+      }, 0);
+      map.set(name, balance);
+    }
+    return map;
+  }, [customerNames, customerLedgerEntries]);
+
+  const filteredCustomers = customerNames.filter((name) =>
+    name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const selectedEntries = customerLedgerEntries.filter(
+    (entry) => entry.customerName === selectedCustomer,
+  );
+  const selectedBalance = customerBalances.get(selectedCustomer) ?? 0;
+  const selectedAccount = customerAccounts.find(
+    (account) => account.customerName === selectedCustomer,
+  );
+
+  async function handleRecordPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    setBusy(true);
+
+    const formData = new FormData(event.currentTarget);
+    const response = await fetch("/api/accounting/ledger/entry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customerName: selectedCustomer,
+        amount: Number(formData.get("creditAmount")),
+        paymentMode: formData.get("paymentMode"),
+        description: formData.get("creditDescription"),
+      }),
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ error: "Request failed." }));
+      setError(payload.error ?? "Request failed.");
+      setBusy(false);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage("Payment recorded successfully.");
+    setBusy(false);
+    startTransition(() => router.refresh());
+  }
+
+  return (
+    <section className="accounting-section">
+      <div className="accounting-command-row">
+        <div>
+          <h2>Customer Ledgers</h2>
+          <p className="panel-copy">One ledger per client. View all debits (dispatches) and credits (payments) in one place.</p>
+        </div>
+        <span className="status-badge status-confirmed">{customerNames.length} clients</span>
+      </div>
+
+      <div className="three-grid" style={{ gap: "16px", alignItems: "start" }}>
+        {/* Client list */}
+        <div className="panel" style={{ maxHeight: "520px", overflow: "auto" }}>
+          <div className="field" style={{ marginBottom: "8px" }}>
+            <input
+              id="ledger-search"
+              type="text"
+              placeholder="Search customer..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="data-list">
+            {filteredCustomers.length ? (
+              filteredCustomers.map((name) => {
+                const balance = customerBalances.get(name) ?? 0;
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    className={selectedCustomer === name ? "data-row is-selected" : "data-row"}
+                    onClick={() => {
+                      setSelectedCustomer(name);
+                      setMessage("");
+                      setError("");
+                    }}
+                    style={{ cursor: "pointer", textAlign: "left", width: "100%" }}
+                  >
+                    <h4>{name}</h4>
+                    <p style={{ color: balance > 0 ? "var(--danger)" : "var(--success)" }}>
+                      {balance > 0 ? `₹${Math.round(balance).toLocaleString("en-IN")} due` : balance < 0 ? `₹${Math.round(Math.abs(balance)).toLocaleString("en-IN")} advance` : "Settled"}
+                    </p>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="note-box">No customers found.</div>
+            )}
+          </div>
+        </div>
+
+        {/* Transaction history + payment form */}
+        <div style={{ gridColumn: "span 2" }}>
+          {selectedCustomer ? (
+            <>
+              <div className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h3>{selectedCustomer}</h3>
+                    <p className="panel-copy">
+                      Balance: <strong style={{ color: selectedBalance > 0 ? "var(--danger)" : "var(--success)" }}>
+                        {selectedBalance > 0 ? `₹${Math.round(selectedBalance).toLocaleString("en-IN")} due` : selectedBalance < 0 ? `₹${Math.round(Math.abs(selectedBalance)).toLocaleString("en-IN")} advance` : "Settled"}
+                      </strong>
+                      {selectedAccount ? ` | Credit limit: ₹${selectedAccount.creditLimit.toLocaleString("en-IN")} | Risk: ${selectedAccount.riskLevel}` : ""}
+                    </p>
+                  </div>
+                </div>
+
+                {selectedEntries.length ? (
+                  <div className="table-scroll" style={{ marginTop: "12px" }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Type</th>
+                          <th>Description</th>
+                          <th>Mode</th>
+                          <th style={{ textAlign: "right" }}>Debit</th>
+                          <th style={{ textAlign: "right" }}>Credit</th>
+                          <th style={{ textAlign: "right" }}>Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedEntries.map((entry) => (
+                          <tr key={entry.id}>
+                            <td>{toIndiaTimeLabel(entry.createdAt)}</td>
+                            <td>
+                              <span className={entry.type === "DEBIT" ? "status-badge status-rejected" : "status-badge status-confirmed"}>
+                                {entry.type}
+                              </span>
+                            </td>
+                            <td>{entry.description}</td>
+                            <td>{entry.paymentMode.replaceAll("_", " ")}</td>
+                            <td style={{ textAlign: "right" }}>{entry.type === "DEBIT" ? `₹${Math.round(entry.amount).toLocaleString("en-IN")}` : "-"}</td>
+                            <td style={{ textAlign: "right" }}>{entry.type === "CREDIT" ? `₹${Math.round(entry.amount).toLocaleString("en-IN")}` : "-"}</td>
+                            <td style={{ textAlign: "right", fontWeight: 600 }}>₹{Math.round(entry.runningBalance).toLocaleString("en-IN")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="note-box" style={{ marginTop: "12px" }}>No transactions yet for this customer.</div>
+                )}
+              </div>
+
+              {/* Record Payment Form */}
+              <div className="panel" style={{ marginTop: "16px" }}>
+                <h4>Record Payment (Credit)</h4>
+                <p className="panel-copy" style={{ marginBottom: "12px" }}>Manually record a cash, cheque, NEFT, or UPI payment from this customer.</p>
+                {message ? <div className="success-box">{message}</div> : null}
+                {error ? <div className="error-box">{error}</div> : null}
+                <form className="form-grid" onSubmit={handleRecordPayment}>
+                  <div className="three-grid">
+                    <div className="field">
+                      <label htmlFor="creditAmount">Amount (₹)</label>
+                      <input id="creditAmount" name="creditAmount" type="number" min="1" step="0.01" required />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="paymentMode">Payment Mode</label>
+                      <select id="paymentMode" name="paymentMode" defaultValue="NEFT" required>
+                        <option value="CASH">Cash</option>
+                        <option value="CHEQUE">Cheque</option>
+                        <option value="NEFT">NEFT</option>
+                        <option value="UPI">UPI</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="creditDescription">Description</label>
+                      <input id="creditDescription" name="creditDescription" placeholder="Cheque #, UTR, etc." />
+                    </div>
+                  </div>
+                  <button className="button" type="submit" disabled={busy}>
+                    {busy ? "Recording..." : "Record Payment"}
+                  </button>
+                </form>
+              </div>
+            </>
+          ) : (
+            <div className="panel">
+              <div className="note-box">Select a customer from the list to view their ledger statement and record payments.</div>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );

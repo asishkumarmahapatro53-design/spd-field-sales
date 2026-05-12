@@ -418,6 +418,7 @@ function createSeedDatabase(): Database {
     mixDesigns: [],
     dispatchRecords: [],
     commissionVouchers: [],
+    customerLedgerEntries: [],
   };
 }
 
@@ -789,6 +790,7 @@ function normalizeDatabase(rawDatabase: Database) {
     record.pumpDispatchStatus ??= linkedOrder?.pumpDispatchStatus ?? "NOT_DISPATCHED";
   });
   database.commissionVouchers ??= [];
+  database.customerLedgerEntries ??= [];
 
   database.reimbursementClaims ??= [];
   (database.reimbursementClaims ?? []).forEach((claim) => {
@@ -859,6 +861,7 @@ const COLLECTION_NAMES = [
   "mixDesigns",
   "dispatchRecords",
   "commissionVouchers",
+  "customerLedgerEntries",
 ] as const;
 
 export type DatabaseCollectionName = (typeof COLLECTION_NAMES)[number];

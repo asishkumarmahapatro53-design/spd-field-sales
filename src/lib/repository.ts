@@ -2502,6 +2502,7 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
     mixDesigns: [],
     dispatchRecords: [],
     commissionVouchers: [],
+    customerLedgerEntries: [],
     ...input,
   };
 }
@@ -2838,6 +2839,8 @@ export async function getAccountingDashboardData(user: User): Promise<Accounting
     approvals: database.approvalRequests,
     salesOrderRequests: [...database.salesOrderRequests].sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     agents: database.users.filter((entry) => entry.role === "SALES_AGENT"),
+    customerAccounts: database.customerAccounts ?? [],
+    customerLedgerEntries: [...(database.customerLedgerEntries ?? [])].sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
   };
 }
 

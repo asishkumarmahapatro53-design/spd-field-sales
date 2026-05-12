@@ -21,6 +21,11 @@ export default async function AccountingPage() {
     return sum + entry.totalAmount;
   }, 0);
 
+  const uniqueCustomerNames = new Set(data.customerLedgerEntries.map((entry) => entry.customerName));
+  const customerLedgerBalance = data.customerLedgerEntries.reduce((sum, entry) => {
+    return entry.type === "DEBIT" ? sum + entry.amount : sum - entry.amount;
+  }, 0);
+
   return (
     <AppShell
       user={user}
@@ -34,6 +39,8 @@ export default async function AccountingPage() {
         <MetricCard label="Ledger queue" value={pendingFinanceOrders} note="Sales requests waiting for ledger creation" />
         <MetricCard label="Outstanding amount" value={`₹${Math.round(totalOutstanding).toLocaleString("en-IN")}`} note="Unpaid verified reimbursements" />
         <MetricCard label="Paid claims" value={data.reimbursementClaims.filter((entry) => entry.status === "PAID").length} note="OTP verified payments" />
+        <MetricCard label="Customer ledgers" value={uniqueCustomerNames.size || data.customerAccounts.length} note="Active client accounts" />
+        <MetricCard label="Customer outstanding" value={`₹${Math.round(Math.max(0, customerLedgerBalance)).toLocaleString("en-IN")}`} note="Total customer receivables" />
       </section>
 
       <AccountingWorkspace
@@ -42,6 +49,8 @@ export default async function AccountingPage() {
         reimbursements={data.reimbursements}
         claims={data.reimbursementClaims}
         salesOrderRequests={data.salesOrderRequests}
+        customerAccounts={data.customerAccounts}
+        customerLedgerEntries={data.customerLedgerEntries}
       />
     </AppShell>
   );

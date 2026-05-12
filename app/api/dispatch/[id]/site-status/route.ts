@@ -42,6 +42,48 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         record.finalSuppliedCum = 0;
       }
 
+      // Automatic ledger debit on SITE_ACCEPTED
+      if (nextStatus === "SITE_ACCEPTED") {
+        const order = draft.salesOrderRequests.find((entry) => entry.id === record.orderId);
+        if (order) {
+          const customerName = order.customerName;
+          const debitAmount = record.finalSuppliedCum * order.approvedPrice;
+
+          if (debitAmount > 0) {
+            // Compute running balance from existing entries for this customer
+            const existingEntries = (draft.customerLedgerEntries ?? []).filter(
+              (entry) => entry.customerName === customerName,
+            );
+            const currentBalance = existingEntries.reduce((sum, entry) => {
+              return entry.type === "DEBIT" ? sum + entry.amount : sum - entry.amount;
+            }, 0);
+            const newBalance = currentBalance + debitAmount;
+
+            draft.customerLedgerEntries ??= [];
+            draft.customerLedgerEntries.push({
+              id: randomUUID(),
+              customerName,
+              type: "DEBIT",
+              amount: debitAmount,
+              runningBalance: newBalance,
+              description: `Challan ${record.challanNumber} — ${record.finalSuppliedCum} CUM @ ₹${order.approvedPrice}/CUM`,
+              referenceId: record.id,
+              paymentMode: "AUTO_DISPATCH",
+              createdBy: user.id,
+              createdAt: now,
+            });
+
+            // Update customer account outstanding amount if account exists
+            const account = draft.customerAccounts.find(
+              (entry) => entry.customerName === customerName,
+            );
+            if (account) {
+              account.outstandingAmount += debitAmount;
+            }
+          }
+        }
+      }
+
       draft.auditLogs.unshift({
         id: randomUUID(),
         actorId: user.id,
