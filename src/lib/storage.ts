@@ -290,7 +290,7 @@ export async function createPresignedS3GetUrl(key: string, expiresInSeconds = 36
     canonicalQuery,
     canonicalHeaders,
     signedHeaders,
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA256 of empty string
+    "UNSIGNED-PAYLOAD",
   ].join("\n");
   const stringToSign = [
     "AWS4-HMAC-SHA256",
