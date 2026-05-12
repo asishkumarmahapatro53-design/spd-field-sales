@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toIndiaTimeLabel } from "@/lib/date";
 import { canUseInvoiceDocumentMode, getDocumentModeLabel } from "@/lib/legal-workflow";
 import { findMixDesignForOrder } from "@/lib/mix-design";
@@ -15,6 +16,7 @@ interface BatcherWorkspaceProps {
 }
 
 export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDesigns, dispatchRecords }: BatcherWorkspaceProps) {
+  const router = useRouter();
   const [selectedOrderId, setSelectedOrderId] = useState(activeOrders[0]?.id ?? "");
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [dispatchQty, setDispatchQty] = useState<number | "">("");
@@ -25,6 +27,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [lastDispatchRecord, setLastDispatchRecord] = useState<DispatchRecord | null>(null);
 
   const selectedOrder = activeOrders.find((o) => o.id === selectedOrderId);
   const selectedVehicle = fleetVehicles.find((v) => v.id === selectedVehicleId);
@@ -63,6 +66,10 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
       setError(`Cannot dispatch more than the remaining quantity (${selectedOrder.remainingQuantity} CUM).`);
       return;
     }
+    if (dispatchQty > selectedVehicle.capacityCum) {
+      setError(`Cannot dispatch ${dispatchQty} CUM. Selected truck capacity is ${selectedVehicle.capacityCum} CUM.`);
+      return;
+    }
 
     setProcessing(true);
     try {
@@ -84,17 +91,20 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
         throw new Error(d.error ?? "Dispatch failed");
       }
 
-      setSuccess(`Dispatched ${dispatchQty} CUM to ${selectedOrder.siteName} using truck ${selectedVehicle.vehicleCode}.`);
+      const data = (await res.json()) as { dispatchRecord?: DispatchRecord };
+      const dispatchRecord = data.dispatchRecord ?? null;
+      setLastDispatchRecord(dispatchRecord);
+      setSuccess(
+        dispatchRecord
+          ? `Challan ${dispatchRecord.challanNumber} created for ${dispatchQty} CUM to ${selectedOrder.siteName}.`
+          : `Dispatched ${dispatchQty} CUM to ${selectedOrder.siteName} using truck ${selectedVehicle.vehicleCode}.`,
+      );
       setDispatchQty("");
       setSelectedVehicleId("");
       setDocumentMode("CHALLAN_ONLY");
       setDriverName("");
       setDriverPhone("");
-
-      // We rely on router.refresh() in the page to fetch fresh data
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
+      router.refresh();
     } catch (e: any) {
       setError(e.message ?? "An error occurred.");
     } finally {
@@ -115,6 +125,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
   async function markSiteStatus(dispatchId: string, status: "SITE_ACCEPTED" | "SITE_REJECTED") {
     setError("");
     setSuccess("");
+    setLastDispatchRecord(null);
     try {
       const res = await fetch(`/api/dispatch/${dispatchId}/site-status`, {
         method: "PATCH",
@@ -128,9 +139,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
       }
 
       setSuccess(status === "SITE_ACCEPTED" ? "Challan marked accepted and billable." : "Challan rejected and returned to review.");
-      setTimeout(() => {
-        window.location.reload();
-      }, 1200);
+      router.refresh();
     } catch (e: any) {
       setError(e.message ?? "An error occurred.");
     }
@@ -148,6 +157,21 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
 
         {error && <div className="error-box mt-16">{error}</div>}
         {success && <div className="success-box mt-16">{success}</div>}
+        {lastDispatchRecord ? (
+          <div className="note-box mt-16">
+            <div className="panel-header">
+              <div>
+                <h4>Challan ready</h4>
+                <p className="panel-copy">
+                  {lastDispatchRecord.challanNumber} is ready to print. Invoice printing is shown only when invoice mode is selected.
+                </p>
+              </div>
+              <a className="button" href={`/dispatch/${lastDispatchRecord.id}/challan`} target="_blank" rel="noopener noreferrer">
+                Print challan
+              </a>
+            </div>
+          </div>
+        ) : null}
 
         <div className="form-grid mt-24">
           <div className="field">
@@ -276,7 +300,7 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                 <th>Return (CUM)</th>
                 <th>Final (CUM)</th>
                 <th>Status</th>
-                <th>Invoice</th>
+                <th>Documents</th>
                 <th>Site</th>
               </tr>
             </thead>
@@ -296,9 +320,6 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                       <td>
                         <div className="dispatch-doc-links">
                           <strong>{d.challanNumber}</strong>
-                          <a className="button-ghost button-sm" href={`/dispatch/${d.id}/challan`} target="_blank" rel="noopener noreferrer">
-                            Print challan
-                          </a>
                         </div>
                       </td>
                       <td><strong>{d.vehicleCode}</strong></td>
@@ -314,13 +335,16 @@ export function BatcherWorkspace({ plantName, activeOrders, fleetVehicles, mixDe
                         </span>
                       </td>
                       <td>
-                        {d.documentMode === "CHALLAN_ONLY" ? (
-                          "-"
-                        ) : (
+                        <div className="dispatch-doc-links">
+                          <a className="button-ghost button-sm" href={`/dispatch/${d.id}/challan`} target="_blank" rel="noopener noreferrer">
+                            Print challan
+                          </a>
+                          {d.documentMode !== "CHALLAN_ONLY" ? (
                           <a className="button-ghost" href={`/dispatch/${d.id}/invoice`} target="_blank" rel="noopener noreferrer">
                             Print invoice
                           </a>
-                        )}
+                          ) : null}
+                        </div>
                       </td>
                       <td>
                         {d.status === "DISPATCHED" ? (

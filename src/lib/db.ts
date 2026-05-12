@@ -69,9 +69,15 @@ function canUseLocalDatabaseFallback() {
   return process.env.NODE_ENV !== "production" || allowsEphemeralPersistence();
 }
 
-function requireDurableDatabase(context: string): never {
+function describeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/\s+/g, " ").trim();
+}
+
+function requireDurableDatabase(context: string, error?: unknown): never {
+  const rootCause = error ? ` Root cause: ${describeError(error)}.` : "";
   throw new Error(
-    `${context}: persistent database is unavailable. Configure Firebase Firestore for production instead of using disposable local storage.`,
+    `${context}: persistent database is unavailable. Configure Firebase Firestore for production instead of using disposable local storage.${rootCause}`,
   );
 }
 
@@ -864,6 +870,15 @@ const COLLECTION_NAMES = [
   "customerLedgerEntries",
 ] as const;
 
+// Compile-time safety: if a new Database collection is added but not listed above,
+// TypeScript fails the build so production never misses Firestore sync wiring.
+type CollectionNameCoverage = (typeof COLLECTION_NAMES)[number];
+type MissingCollectionNames = Exclude<keyof Database, CollectionNameCoverage>;
+type ExtraCollectionNames = Exclude<CollectionNameCoverage, keyof Database>;
+type EnsureNever<T extends never> = T;
+type _CollectionNamesMustCoverAllDatabaseKeys = EnsureNever<MissingCollectionNames>;
+type _CollectionNamesMustNotContainUnknownKeys = EnsureNever<ExtraCollectionNames>;
+
 export type DatabaseCollectionName = (typeof COLLECTION_NAMES)[number];
 type DatabaseCollectionItem<K extends DatabaseCollectionName> = Database[K] extends Array<infer Item> ? Item : never;
 
@@ -1204,7 +1219,7 @@ async function readDatabaseFresh(): Promise<Database> {
       setDatabaseReadCache(database);
       return database;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       console.error(`Firebase read failed: ${message}`);
       const staleDatabase = getStaleCachedDatabase();
 
@@ -1214,7 +1229,7 @@ async function readDatabaseFresh(): Promise<Database> {
       }
 
       if (!canUseLocalDatabaseFallback()) {
-        requireDurableDatabase("Firebase read failed");
+        requireDurableDatabase("Firebase read failed", error);
       }
     }
   }
@@ -1251,10 +1266,10 @@ export async function writeDatabase(database: Database) {
       setDatabaseReadCache(database);
       return;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeError(error);
       console.error(`Firebase write failed: ${message}`);
       if (!canUseLocalDatabaseFallback()) {
-        requireDurableDatabase("Firebase write failed");
+        requireDurableDatabase("Firebase write failed", error);
       }
     }
   }
@@ -1270,12 +1285,21 @@ export async function writeDatabase(database: Database) {
 
 export async function updateDatabase<T>(updater: (database: Database) => Promise<T> | T): Promise<T> {
   if (hasFirebaseCredentialShape()) {
+    // Instead of locking a giant transaction, we read the collections concurrently, run the updater,
+    // and then apply isolated diffs. This allows high-concurrency writes without Firestore lock contention.
+    let database: Database | null = null;
     try {
-      // Instead of locking a giant transaction, we read the collections concurrently, run the updater, and then apply isolated diffs.
-      // This allows 100 concurrent users to write without Firestore locking errors.
-      const database = await ensureFirebaseCollections();
-      
-      // Create deep clones to diff later
+      database = await ensureFirebaseCollections();
+    } catch (error) {
+      const message = describeError(error);
+      console.error(`Firebase update failed while reading collections: ${message}`);
+      if (!canUseLocalDatabaseFallback()) {
+        requireDurableDatabase("Firebase update failed", error);
+      }
+    }
+
+    if (database) {
+      // Create deep clones to diff later.
       const originalMaps = new Map<string, Map<string, any>>();
       for (const collectionName of COLLECTION_NAMES) {
         const list = (database[collectionName as keyof Database] || []) as any[];
@@ -1286,8 +1310,10 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
         originalMaps.set(collectionName, map);
       }
 
+      // Business/domain errors from updater must bubble up unchanged to the API caller.
       const result = await updater(database);
-      
+
+      try {
       const firestore = await getFirebaseFirestore();
       const rootCollection = getFirebaseRootPath();
       let batch = firestore.batch();
@@ -1338,11 +1364,12 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
 
       setDatabaseReadCache(database);
       return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`Firebase update failed: ${message}`);
-      if (!canUseLocalDatabaseFallback()) {
-        requireDurableDatabase("Firebase update failed");
+      } catch (error) {
+        const message = describeError(error);
+        console.error(`Firebase update failed while writing diffs: ${message}`);
+        if (!canUseLocalDatabaseFallback()) {
+          requireDurableDatabase("Firebase update failed", error);
+        }
       }
     }
   }
