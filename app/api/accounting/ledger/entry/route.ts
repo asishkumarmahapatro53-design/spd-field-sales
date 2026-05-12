@@ -4,6 +4,7 @@ import {
   createCustomerAccountFromSalesOrder,
   customerLedgerKey,
   findCustomerAccountByName,
+  getCustomerLedgerBalance,
   isLedgerReadySalesOrder,
 } from "@/lib/customer-ledger";
 import { nowIso } from "@/lib/date";
@@ -77,7 +78,7 @@ export async function POST(request: Request) {
       }
 
       if (account) {
-        account.outstandingAmount = Math.max(0, account.outstandingAmount - amount);
+        account.outstandingAmount = Math.max(0, getCustomerLedgerBalance(draft.customerLedgerEntries, customerName));
         account.lastPaymentAt = now;
       }
 

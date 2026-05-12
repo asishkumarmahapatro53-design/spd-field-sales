@@ -9,7 +9,15 @@ import {
   requiresPdcUpload,
   requiresPoUpload,
 } from "@/lib/commercial";
-import { createCustomerAccountFromSalesOrder, findCustomerAccountByName } from "@/lib/customer-ledger";
+import {
+  buildEffectiveCustomerLedgerEntries,
+  createAdvanceReceiptLedgerEntry,
+  createCustomerAccountFromSalesOrder,
+  findCustomerAccountByName,
+  getAdvanceReceiptReferenceId,
+  getCustomerLedgerBalance,
+  shouldCreateAdvanceReceiptCredit,
+} from "@/lib/customer-ledger";
 import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
 import { readCollection, readCollectionByFieldValues, readDatabase, updateDatabase } from "@/lib/db";
 import { sendGmail } from "@/lib/gmail-smtp";
@@ -2119,9 +2127,10 @@ export async function reviewSalesOrderRequestByAccounting(
 
     if (status === "FINANCE_VERIFIED") {
       database.customerAccounts ??= [];
+      database.customerLedgerEntries ??= [];
       const existingAccount = findCustomerAccountByName(database.customerAccounts, request.customerName);
+      const account = existingAccount ?? createCustomerAccountFromSalesOrder(randomUUID(), request);
       if (!existingAccount) {
-        const account = createCustomerAccountFromSalesOrder(randomUUID(), request);
         database.customerAccounts.push(account);
         logAudit(
           database,
@@ -2130,6 +2139,25 @@ export async function reviewSalesOrderRequestByAccounting(
           account.id,
           "CREATE",
           `Created customer ledger account for ${account.customerName}.`,
+        );
+      }
+
+      const advanceReferenceId = getAdvanceReceiptReferenceId(request.id);
+      const advanceCreditExists = database.customerLedgerEntries.some((entry) => entry.referenceId === advanceReferenceId);
+      if (shouldCreateAdvanceReceiptCredit(request) && !advanceCreditExists) {
+        const entry = createAdvanceReceiptLedgerEntry(randomUUID(), request, user.id);
+        entry.runningBalance = getCustomerLedgerBalance(database.customerLedgerEntries, request.customerName) - entry.amount;
+        database.customerLedgerEntries.push(entry);
+        account.outstandingAmount = Math.max(0, account.outstandingAmount - entry.amount);
+        account.lastPaymentAt = entry.createdAt;
+
+        logAudit(
+          database,
+          user,
+          "CustomerLedger",
+          entry.id,
+          "ADVANCE_CREDIT_POSTED",
+          `Posted advance payment credit of Rs.${entry.amount.toLocaleString("en-IN")} for ${request.customerName}.`,
         );
       }
     }
@@ -2718,7 +2746,18 @@ async function getManagerScopedDashboardDatabase() {
 async function getAccountingScopedDashboardDatabase() {
   const recentDateKey = getRecentDateKey(90);
   const limit = getDashboardCollectionLimit(800);
-  const [users, plants, workdaySessions, reimbursementClaims, tasks, approvals, salesOrderRequests] = await Promise.all([
+  const [
+    users,
+    plants,
+    workdaySessions,
+    reimbursementClaims,
+    tasks,
+    approvals,
+    salesOrderRequests,
+    customerAccounts,
+    customerLedgerEntries,
+    dispatchRecords,
+  ] = await Promise.all([
     readCollection("users"),
     readCollection("plants"),
     readCollection("workdaySessions", { filters: [{ field: "date", op: ">=", value: recentDateKey }], limit }),
@@ -2726,6 +2765,9 @@ async function getAccountingScopedDashboardDatabase() {
     readCollection("tasks", { limit }),
     readCollection("approvalRequests", { limit }),
     readCollection("salesOrderRequests", { limit }),
+    readCollection("customerAccounts", { limit }),
+    readCollection("customerLedgerEntries", { limit }),
+    readCollection("dispatchRecords", { limit }),
   ]);
   const sessionIds = workdaySessions.map((entry) => entry.id);
   const [readings, siteVisits] = await Promise.all([
@@ -2743,6 +2785,9 @@ async function getAccountingScopedDashboardDatabase() {
     tasks,
     approvalRequests: approvals,
     salesOrderRequests,
+    customerAccounts,
+    customerLedgerEntries,
+    dispatchRecords,
   });
 }
 
@@ -2859,7 +2904,11 @@ export async function getAccountingDashboardData(user: User): Promise<Accounting
     salesOrderRequests: [...database.salesOrderRequests].sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     agents: database.users.filter((entry) => entry.role === "SALES_AGENT"),
     customerAccounts: database.customerAccounts ?? [],
-    customerLedgerEntries: [...(database.customerLedgerEntries ?? [])].sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
+    customerLedgerEntries: buildEffectiveCustomerLedgerEntries({
+      customerLedgerEntries: database.customerLedgerEntries ?? [],
+      salesOrderRequests: database.salesOrderRequests ?? [],
+      dispatchRecords: database.dispatchRecords ?? [],
+    }),
   };
 }
 

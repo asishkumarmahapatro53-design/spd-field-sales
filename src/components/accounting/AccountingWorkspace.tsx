@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AccountingSalesOrderVerification } from "@/components/accounting/AccountingSalesOrderVerification";
 import { CommissionVoucherPanel } from "@/components/accounting/CommissionVoucherPanel";
+import { getSalesOrderStatusMeta, normalizePaymentTerms } from "@/lib/commercial";
 import { customerLedgerKey, findCustomerAccountByName, getLedgerCustomerNames, isLedgerReadySalesOrder } from "@/lib/customer-ledger";
 import { toIndiaTimeLabel } from "@/lib/date";
 import type { CustomerAccount, CustomerLedgerEntry, Plant, ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
@@ -404,6 +405,7 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
         </section>
       ) : departmentId === "CUSTOMER_LEDGERS" ? (
         <CustomerLedgerPanel
+          plants={plants}
           customerAccounts={customerAccounts}
           customerLedgerEntries={customerLedgerEntries}
           salesOrderRequests={salesOrderRequests}
@@ -444,10 +446,12 @@ function DepartmentPlaceholder({ departmentId }: { departmentId: Exclude<Departm
 }
 
 function CustomerLedgerPanel({
+  plants,
   customerAccounts,
   customerLedgerEntries,
   salesOrderRequests,
 }: {
+  plants: Plant[];
   customerAccounts: CustomerAccount[];
   customerLedgerEntries: CustomerLedgerEntry[];
   salesOrderRequests: SalesOrderRequest[];
@@ -459,6 +463,7 @@ function CustomerLedgerPanel({
   const [busy, setBusy] = useState(false);
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const plantById = useMemo(() => new Map(plants.map((plant) => [plant.id, plant])), [plants]);
 
   // Include legacy ledger-created orders so old production rows do not disappear from the ledger list.
   const customerNames = useMemo(() => {
@@ -492,6 +497,9 @@ function CustomerLedgerPanel({
   const selectedOrders = salesOrderRequests.filter(
     (request) => isLedgerReadySalesOrder(request) && customerLedgerKey(request.customerName) === customerLedgerKey(selectedCustomer),
   );
+  const selectedOrderValue = selectedOrders.reduce((sum, order) => sum + order.amount, 0);
+  const selectedOrderQuantity = selectedOrders.reduce((sum, order) => sum + order.quantity, 0);
+  const selectedRemainingQuantity = selectedOrders.reduce((sum, order) => sum + order.remainingQuantity, 0);
 
   async function handleRecordPayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -592,6 +600,71 @@ function CustomerLedgerPanel({
                   </div>
                 </div>
 
+                {selectedOrders.length ? (
+                  <>
+                    <div className="metric-grid" style={{ marginTop: "12px" }}>
+                      <div className="metric-card">
+                        <span className="metric-label">Linked order value</span>
+                        <strong>{money(selectedOrderValue)}</strong>
+                        <small>Commercial value, not yet ledger debit</small>
+                      </div>
+                      <div className="metric-card">
+                        <span className="metric-label">Order quantity</span>
+                        <strong>{numberValue(selectedOrderQuantity)} CUM</strong>
+                        <small>{numberValue(selectedRemainingQuantity)} CUM remaining</small>
+                      </div>
+                      <div className="metric-card">
+                        <span className="metric-label">Ledger status</span>
+                        <strong>{selectedEntries.length ? "Transactions posted" : "Order data only"}</strong>
+                        <small>Debit starts after site acceptance</small>
+                      </div>
+                    </div>
+
+                    <div className="table-scroll" style={{ marginTop: "12px" }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Created</th>
+                            <th>Plant</th>
+                            <th>Site</th>
+                            <th>Grade</th>
+                            <th>Qty</th>
+                            <th>Remaining</th>
+                            <th>Rate</th>
+                            <th>Order value</th>
+                            <th>Payment</th>
+                            <th>GSTIN</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedOrders.map((order) => {
+                            const statusMeta = getSalesOrderStatusMeta(order.status);
+                            const paymentTerms = normalizePaymentTerms(order.paymentType, order.paymentTerms).replaceAll("_", " ");
+                            return (
+                              <tr key={order.id}>
+                                <td>{toIndiaTimeLabel(order.createdAt)}</td>
+                                <td>{plantById.get(order.plantId)?.name ?? order.plantId}</td>
+                                <td>{order.siteName}</td>
+                                <td>{order.grade}</td>
+                                <td>{numberValue(order.quantity)} CUM</td>
+                                <td>{numberValue(order.remainingQuantity)} CUM</td>
+                                <td>{money(order.approvedPrice)}/CUM</td>
+                                <td>{money(order.amount)}</td>
+                                <td>{order.paymentType} / {paymentTerms}</td>
+                                <td>{order.gstin ?? "-"}</td>
+                                <td>
+                                  <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : null}
+
                 {selectedEntries.length ? (
                   <div className="table-scroll" style={{ marginTop: "12px" }}>
                     <table>
@@ -628,7 +701,6 @@ function CustomerLedgerPanel({
                 ) : (
                   <div className="note-box" style={{ marginTop: "12px" }}>
                     No debit or credit transactions yet. The customer ledger is created; debit entries will appear after site-accepted dispatches, and credit entries will appear after recorded payments.
-                    {selectedOrders.length ? ` Linked orders: ${selectedOrders.map((order) => `${order.grade} ${numberValue(order.quantity)} CUM`).join(", ")}.` : ""}
                   </div>
                 )}
               </div>

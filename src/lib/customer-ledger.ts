@@ -1,4 +1,6 @@
-import type { CustomerAccount, CustomerLedgerEntry, SalesOrderRequest, SalesOrderRequestStatus } from "@/lib/types";
+import { normalizePaymentTerms, requiresPaymentReceipt } from "@/lib/commercial";
+import { compareIsoAsc } from "@/lib/date";
+import type { CustomerAccount, CustomerLedgerEntry, DispatchRecord, SalesOrderRequest, SalesOrderRequestStatus } from "@/lib/types";
 
 const LEDGER_READY_STATUSES: SalesOrderRequestStatus[] = [
   "FINANCE_VERIFIED",
@@ -32,6 +34,114 @@ export function createCustomerAccountFromSalesOrder(id: string, request: SalesOr
     riskLevel: "LOW",
     lastPaymentAt: null,
   };
+}
+
+export function getAdvanceReceiptReferenceId(requestId: string) {
+  return `advance:${requestId}`;
+}
+
+export function shouldCreateAdvanceReceiptCredit(request: SalesOrderRequest) {
+  const paymentTerms = normalizePaymentTerms(request.paymentType, request.paymentTerms);
+  return (
+    isLedgerReadySalesOrder(request) &&
+    request.paymentReceivedConfirmed &&
+    requiresPaymentReceipt(request.paymentType, paymentTerms) &&
+    request.amount > 0
+  );
+}
+
+export function getCustomerLedgerBalance(entries: CustomerLedgerEntry[], customerName: string) {
+  const key = customerLedgerKey(customerName);
+  return entries
+    .filter((entry) => customerLedgerKey(entry.customerName) === key)
+    .reduce((sum, entry) => (entry.type === "DEBIT" ? sum + entry.amount : sum - entry.amount), 0);
+}
+
+export function createAdvanceReceiptLedgerEntry(
+  id: string,
+  request: SalesOrderRequest,
+  createdBy: string,
+): CustomerLedgerEntry {
+  return {
+    id,
+    customerName: request.customerName,
+    type: "CREDIT",
+    amount: request.amount,
+    runningBalance: 0,
+    description: `Advance payment received for ${request.grade} ${request.quantity} CUM order`,
+    referenceId: getAdvanceReceiptReferenceId(request.id),
+    paymentMode: "ADVANCE_RECEIPT",
+    createdBy,
+    createdAt: request.financeReviewedAt ?? request.createdAt,
+  };
+}
+
+export function createDispatchDebitLedgerEntry(
+  id: string,
+  request: SalesOrderRequest,
+  record: DispatchRecord,
+  createdBy: string,
+): CustomerLedgerEntry {
+  return {
+    id,
+    customerName: request.customerName,
+    type: "DEBIT",
+    amount: record.finalSuppliedCum * request.approvedPrice,
+    runningBalance: 0,
+    description: `Challan ${record.challanNumber} - ${record.finalSuppliedCum} CUM @ Rs.${request.approvedPrice}/CUM`,
+    referenceId: record.id,
+    paymentMode: "AUTO_DISPATCH",
+    createdBy,
+    createdAt: record.siteAcceptedAt ?? record.dispatchedAt,
+  };
+}
+
+export function recomputeCustomerLedgerRunningBalances(entries: CustomerLedgerEntry[]) {
+  const balances = new Map<string, number>();
+
+  return [...entries]
+    .sort((left, right) => compareIsoAsc(left.createdAt, right.createdAt) || left.id.localeCompare(right.id))
+    .map((entry) => {
+      const key = customerLedgerKey(entry.customerName);
+      const currentBalance = balances.get(key) ?? 0;
+      const nextBalance = entry.type === "DEBIT" ? currentBalance + entry.amount : currentBalance - entry.amount;
+      balances.set(key, nextBalance);
+      return { ...entry, runningBalance: nextBalance };
+    });
+}
+
+export function buildEffectiveCustomerLedgerEntries(input: {
+  customerLedgerEntries: CustomerLedgerEntry[];
+  salesOrderRequests: SalesOrderRequest[];
+  dispatchRecords: DispatchRecord[];
+}) {
+  const existingReferences = new Set(
+    input.customerLedgerEntries.map((entry) => entry.referenceId).filter((referenceId): referenceId is string => Boolean(referenceId)),
+  );
+  const orderById = new Map(input.salesOrderRequests.map((order) => [order.id, order]));
+  const synthesizedEntries: CustomerLedgerEntry[] = [];
+
+  for (const request of input.salesOrderRequests) {
+    const referenceId = getAdvanceReceiptReferenceId(request.id);
+    if (shouldCreateAdvanceReceiptCredit(request) && !existingReferences.has(referenceId)) {
+      synthesizedEntries.push(createAdvanceReceiptLedgerEntry(`derived-${referenceId}`, request, request.financeReviewedBy ?? request.createdBy));
+      existingReferences.add(referenceId);
+    }
+  }
+
+  for (const record of input.dispatchRecords) {
+    const order = orderById.get(record.orderId);
+    if (!order || record.status !== "SITE_ACCEPTED" || record.finalSuppliedCum <= 0 || existingReferences.has(record.id)) {
+      continue;
+    }
+
+    synthesizedEntries.push(createDispatchDebitLedgerEntry(`derived-dispatch-${record.id}`, order, record, record.createdBy));
+    existingReferences.add(record.id);
+  }
+
+  return recomputeCustomerLedgerRunningBalances([...input.customerLedgerEntries, ...synthesizedEntries]).sort((left, right) =>
+    compareIsoAsc(right.createdAt, left.createdAt),
+  );
 }
 
 export function getLedgerCustomerNames(input: {

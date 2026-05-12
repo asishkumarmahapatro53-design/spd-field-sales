@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { jsonError, jsonOk, requireApiUser } from "@/lib/api";
-import { createCustomerAccountFromSalesOrder, findCustomerAccountByName } from "@/lib/customer-ledger";
+import { createCustomerAccountFromSalesOrder, findCustomerAccountByName, getCustomerLedgerBalance } from "@/lib/customer-ledger";
 import { nowIso } from "@/lib/date";
 import { updateDatabase } from "@/lib/db";
 
@@ -82,7 +82,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             }
 
             if (account) {
-              account.outstandingAmount += debitAmount;
+              account.outstandingAmount = Math.max(0, getCustomerLedgerBalance(draft.customerLedgerEntries, customerName));
             }
           }
         }
