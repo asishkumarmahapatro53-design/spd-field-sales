@@ -4,7 +4,8 @@ import { getCurrentUser, getDashboardPathForRole } from "@/lib/auth";
 import { toIndiaTimeLabel } from "@/lib/date";
 import { readCollection } from "@/lib/db";
 import { getDocumentModeLabel } from "@/lib/legal-workflow";
-import type { UserRole } from "@/lib/types";
+import { getActiveDocumentTemplate } from "@/lib/repository";
+import type { DocumentTemplate, UserRole } from "@/lib/types";
 
 interface DispatchChallanPageProps {
   params: Promise<{ id: string }>;
@@ -22,6 +23,10 @@ function quantity(value: number) {
 
 function statusLabel(value: string) {
   return value.replaceAll("_", " ").toLowerCase();
+}
+
+function isImageTemplate(template: DocumentTemplate | null) {
+  return Boolean(template?.fileMimeType.startsWith("image/"));
 }
 
 export default async function DispatchChallanPage({ params }: DispatchChallanPageProps) {
@@ -61,12 +66,19 @@ export default async function DispatchChallanPage({ params }: DispatchChallanPag
   const isRejected = dispatchRecord.status === "SITE_REJECTED";
   const isReturnPendingAcceptance = dispatchRecord.status === "RETURNED";
   const finalSuppliedCum = isRejected ? 0 : dispatchRecord.finalSuppliedCum;
+  const template = await getActiveDocumentTemplate("CHALLAN");
 
   return (
     <main className="invoice-print-shell">
       <InvoicePrintActions backHref={backHref} printLabel="Print challan" />
 
-      <section className="invoice-sheet">
+      <section className={template ? "invoice-sheet is-template-backed" : "invoice-sheet"}>
+        {isImageTemplate(template) ? <img className="document-template-artwork" src={template?.fileUrl} alt="" /> : null}
+        {template && !isImageTemplate(template) ? (
+          <div className="print-warning-banner is-caution">
+            Active challan template is stored as a PDF reference: <a href={template.fileUrl} target="_blank" rel="noopener noreferrer">{template.originalFileName}</a>
+          </div>
+        ) : null}
         {isRejected ? (
           <div className="print-warning-banner">
             Rejected dispatch. This challan is void for billing and should be retained only as an exception record.

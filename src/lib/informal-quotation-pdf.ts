@@ -1,4 +1,4 @@
-import type { InformalQuotationRequest, Plant, User } from "@/lib/types";
+import type { DocumentTemplate, InformalQuotationRequest, Plant, User } from "@/lib/types";
 
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
@@ -21,6 +21,7 @@ interface QuotationPdfInput {
   plant: Plant | null;
   manager: User | null;
   salesAgent: User | null;
+  template: DocumentTemplate;
 }
 
 class SimplePdf {
@@ -253,12 +254,14 @@ function paragraph(pdf: SimplePdf, text: string, y: number, options: TextOptions
 }
 
 export function generateInformalQuotationPdf(input: QuotationPdfInput) {
-  const { quotation, plant } = input;
+  const { quotation, plant, template } = input;
   const unitName = plant?.unitName || plant?.name || "Andharua";
   const pdf = new SimplePdf();
 
   drawHeader(pdf, quotation);
   let y = 754;
+  y = paragraph(pdf, `Template: ${template.name} (${template.originalFileName})`, y, { size: 8.5 });
+  y -= 8;
   y = paragraph(pdf, "To:", y, { font: "F2" });
   y = paragraph(pdf, quotation.customerName.toUpperCase(), y - 2, { font: "F2" });
   y = paragraph(pdf, quotation.billingAddress.toUpperCase(), y - 2);

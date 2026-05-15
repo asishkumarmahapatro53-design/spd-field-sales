@@ -7,13 +7,24 @@ import { CommissionVoucherPanel } from "@/components/accounting/CommissionVouche
 import { getSalesOrderStatusMeta, normalizePaymentTerms } from "@/lib/commercial";
 import { customerLedgerKey, findCustomerAccountByName, getLedgerCustomerNames, isLedgerReadySalesOrder } from "@/lib/customer-ledger";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { CustomerAccount, CustomerLedgerEntry, Plant, ReimbursementClaim, ReimbursementSummary, SalesOrderRequest, User } from "@/lib/types";
+import type {
+  CustomerAccount,
+  CustomerLedgerEntry,
+  DocumentTemplate,
+  DocumentTemplateType,
+  Plant,
+  ReimbursementClaim,
+  ReimbursementSummary,
+  SalesOrderRequest,
+  User,
+} from "@/lib/types";
 
-type DepartmentId = "SALES" | "PRODUCTION" | "HR" | "LABOR" | "COMMISSION" | "CUSTOMER_LEDGERS";
+type DepartmentId = "SALES" | "PRODUCTION" | "HR" | "LABOR" | "COMMISSION" | "CUSTOMER_LEDGERS" | "DOCUMENT_TEMPLATES";
 
 const departments: Array<{ id: DepartmentId; label: string; scope: string }> = [
   { id: "SALES", label: "Sales Department", scope: "Agent fuel and lunch reimbursement" },
   { id: "CUSTOMER_LEDGERS", label: "Customer Ledgers", scope: "Client-wise debit, credit, and balance tracking" },
+  { id: "DOCUMENT_TEMPLATES", label: "Document Templates", scope: "Upload quotation, challan, and invoice templates" },
   { id: "COMMISSION", label: "Commission & Vouchers", scope: "Third-party and agent commissions with Tally Export" },
   { id: "PRODUCTION", label: "Production Department", scope: "Food and plant support expenses" },
   { id: "HR", label: "HR Department", scope: "Staff payment and welfare requests" },
@@ -69,9 +80,10 @@ interface AccountingWorkspaceProps {
   salesOrderRequests: SalesOrderRequest[];
   customerAccounts: CustomerAccount[];
   customerLedgerEntries: CustomerLedgerEntry[];
+  documentTemplates: DocumentTemplate[];
 }
 
-export function AccountingWorkspace({ agents, plants, reimbursements, claims, salesOrderRequests, customerAccounts, customerLedgerEntries }: AccountingWorkspaceProps) {
+export function AccountingWorkspace({ agents, plants, reimbursements, claims, salesOrderRequests, customerAccounts, customerLedgerEntries, documentTemplates }: AccountingWorkspaceProps) {
   const router = useRouter();
   const [departmentId, setDepartmentId] = useState<DepartmentId>("SALES");
   const [selectedAgentId, setSelectedAgentId] = useState(agents[0]?.id ?? "");
@@ -410,6 +422,8 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
           customerLedgerEntries={customerLedgerEntries}
           salesOrderRequests={salesOrderRequests}
         />
+      ) : departmentId === "DOCUMENT_TEMPLATES" ? (
+        <DocumentTemplatePanel templates={documentTemplates} />
       ) : departmentId === "COMMISSION" ? (
         <section className="accounting-section">
           <CommissionVoucherPanel plants={plants} />
@@ -440,6 +454,127 @@ function DepartmentPlaceholder({ departmentId }: { departmentId: Exclude<Departm
           Payment registers for {dept?.label.toLowerCase()} are being prepared for the next release phase.
           Use the <strong>Sales Department</strong> tab to access agent reimbursements.
         </p>
+      </div>
+    </section>
+  );
+}
+
+const TEMPLATE_TYPES: Array<{ type: DocumentTemplateType; label: string; purpose: string }> = [
+  { type: "QUOTATION", label: "Quotation", purpose: "Used before manager-approved quotation PDF release." },
+  { type: "CHALLAN", label: "Challan", purpose: "Used on dispatch challan print pages." },
+  { type: "INVOICE", label: "Invoice", purpose: "Used on invoice print pages." },
+];
+
+function DocumentTemplatePanel({ templates }: { templates: DocumentTemplate[] }) {
+  const router = useRouter();
+  const [busyType, setBusyType] = useState<DocumentTemplateType | null>(null);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [, startTransition] = useTransition();
+
+  const activeTemplateByType = useMemo(() => {
+    const map = new Map<DocumentTemplateType, DocumentTemplate>();
+    templates
+      .filter((template) => template.status === "ACTIVE")
+      .forEach((template) => {
+        if (!map.has(template.type)) {
+          map.set(template.type, template);
+        }
+      });
+    return map;
+  }, [templates]);
+
+  async function uploadTemplate(event: React.FormEvent<HTMLFormElement>, type: DocumentTemplateType) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    setBusyType(type);
+
+    const formData = new FormData(event.currentTarget);
+    formData.set("type", type);
+
+    const response = await fetch("/api/document-templates", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyType(null);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setMessage(`${type.toLowerCase().replaceAll("_", " ")} template uploaded and activated.`);
+    setBusyType(null);
+    startTransition(() => router.refresh());
+  }
+
+  return (
+    <section className="accounting-section">
+      <div className="accounting-command-row">
+        <div>
+          <h2>Document Templates</h2>
+          <p className="panel-copy">
+            Upload the official templates that the app must use for quotations, challans, and invoices. A new upload
+            automatically becomes active and replaces the previous template for that document type.
+          </p>
+        </div>
+        <span className="status-badge status-confirmed">{templates.filter((template) => template.status === "ACTIVE").length} active</span>
+      </div>
+
+      {message ? <div className="success-box">{message}</div> : null}
+      {error ? <div className="error-box">{error}</div> : null}
+
+      <div className="three-grid">
+        {TEMPLATE_TYPES.map((entry) => {
+          const activeTemplate = activeTemplateByType.get(entry.type);
+          return (
+            <div key={entry.type} className="panel">
+              <div className="panel-header">
+                <div>
+                  <h3>{entry.label} template</h3>
+                  <p className="panel-copy">{entry.purpose}</p>
+                </div>
+                <span className={activeTemplate ? "status-badge status-confirmed" : "status-badge status-pending"}>
+                  {activeTemplate ? "Active" : "Missing"}
+                </span>
+              </div>
+
+              {activeTemplate ? (
+                <div className="note-box">
+                  <strong>{activeTemplate.name}</strong>
+                  <p style={{ margin: "6px 0 0" }}>{activeTemplate.originalFileName}</p>
+                  <p style={{ margin: "6px 0 0" }}>Uploaded {toIndiaTimeLabel(activeTemplate.uploadedAt)}</p>
+                  <a href={activeTemplate.fileUrl} target="_blank" rel="noopener noreferrer">Open active template</a>
+                </div>
+              ) : (
+                <div className="note-box">No active template uploaded yet.</div>
+              )}
+
+              <form className="form-grid mt-16" onSubmit={(event) => void uploadTemplate(event, entry.type)}>
+                <div className="field">
+                  <label htmlFor={`${entry.type}-template-name`}>Template name</label>
+                  <input id={`${entry.type}-template-name`} name="name" placeholder={`${entry.label} official template`} />
+                </div>
+                <div className="field">
+                  <label htmlFor={`${entry.type}-template-file`}>Template file</label>
+                  <input
+                    id={`${entry.type}-template-file`}
+                    name="file"
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp"
+                    required
+                  />
+                  <span className="hint">Use image files for print-page background templates. PDFs are stored as controlled official template references.</span>
+                </div>
+                <button className="button" type="submit" disabled={busyType === entry.type}>
+                  {busyType === entry.type ? "Uploading..." : `Upload ${entry.label.toLowerCase()} template`}
+                </button>
+              </form>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -634,6 +769,8 @@ function CustomerLedgerPanel({
                             <th>Order value</th>
                             <th>Payment</th>
                             <th>GSTIN</th>
+                            <th>Odoo ledger</th>
+                            <th>Odoo SO</th>
                             <th>Status</th>
                           </tr>
                         </thead>
@@ -653,6 +790,8 @@ function CustomerLedgerPanel({
                                 <td>{money(order.amount)}</td>
                                 <td>{order.paymentType} / {paymentTerms}</td>
                                 <td>{order.gstin ?? "-"}</td>
+                                <td>{order.odooPartnerId ? `Partner #${order.odooPartnerId}` : order.odooLedgerSyncStatus?.replaceAll("_", " ").toLowerCase() ?? "-"}</td>
+                                <td>{order.odooSaleOrderName ?? order.odooSalesOrderSyncStatus?.replaceAll("_", " ").toLowerCase() ?? "-"}</td>
                                 <td>
                                   <span className={`status-badge ${statusMeta.className}`}>{statusMeta.label}</span>
                                 </td>

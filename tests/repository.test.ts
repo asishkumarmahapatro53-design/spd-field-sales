@@ -112,6 +112,7 @@ const baseDatabase: Database = {
   priceBenchmarks: [],
   customerAccounts: [],
   customerInvoices: [],
+  documentTemplates: [],
   mixDesigns: [],
   dispatchRecords: [],
   commissionVouchers: [],

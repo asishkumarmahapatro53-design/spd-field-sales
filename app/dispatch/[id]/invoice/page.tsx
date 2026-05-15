@@ -4,7 +4,8 @@ import { getCurrentUser, getDashboardPathForRole } from "@/lib/auth";
 import { toIndiaTimeLabel } from "@/lib/date";
 import { readCollection } from "@/lib/db";
 import { getDocumentModeLabel } from "@/lib/legal-workflow";
-import type { UserRole } from "@/lib/types";
+import { getActiveDocumentTemplate } from "@/lib/repository";
+import type { DocumentTemplate, UserRole } from "@/lib/types";
 
 interface DispatchInvoicePageProps {
   params: Promise<{ id: string }>;
@@ -37,6 +38,10 @@ function quantity(value: number) {
 
 function statusLabel(value: string) {
   return value.replaceAll("_", " ").toLowerCase();
+}
+
+function isImageTemplate(template: DocumentTemplate | null) {
+  return Boolean(template?.fileMimeType.startsWith("image/"));
 }
 
 export default async function DispatchInvoicePage({ params }: DispatchInvoicePageProps) {
@@ -73,6 +78,7 @@ export default async function DispatchInvoicePage({ params }: DispatchInvoicePag
   }
 
   const backHref = user.role === "BATCHER" ? "/batcher" : getDashboardPathForRole(user.role);
+  const template = await getActiveDocumentTemplate("INVOICE");
 
   if (dispatchRecord.documentMode === "CHALLAN_ONLY") {
     return (
@@ -105,7 +111,13 @@ export default async function DispatchInvoicePage({ params }: DispatchInvoicePag
     <main className="invoice-print-shell">
       <InvoicePrintActions backHref={backHref} />
 
-      <section className="invoice-sheet">
+      <section className={template ? "invoice-sheet is-template-backed" : "invoice-sheet"}>
+        {isImageTemplate(template) ? <img className="document-template-artwork" src={template?.fileUrl} alt="" /> : null}
+        {template && !isImageTemplate(template) ? (
+          <div className="print-warning-banner is-caution">
+            Active invoice template is stored as a PDF reference: <a href={template.fileUrl} target="_blank" rel="noopener noreferrer">{template.originalFileName}</a>
+          </div>
+        ) : null}
         {isRejected ? (
           <div className="print-warning-banner">
             Rejected dispatch. This invoice is void and must not be billed to the customer.

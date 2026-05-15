@@ -4,10 +4,25 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { getSalesOrderStatusMeta } from "@/lib/commercial";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { SalesOrderRequest } from "@/lib/types";
+import type { OdooSyncStatus, SalesOrderRequest } from "@/lib/types";
 
 function money(value: number | null | undefined) {
   return `Rs ${Math.round(value ?? 0).toLocaleString("en-IN")}`;
+}
+
+function getOdooStatusMeta(status: OdooSyncStatus | null | undefined) {
+  switch (status) {
+    case "SYNCED":
+      return { label: "synced", className: "status-approved" };
+    case "FAILED":
+      return { label: "failed", className: "status-rejected" };
+    case "SKIPPED":
+      return { label: "skipped", className: "status-pending" };
+    case "PENDING":
+      return { label: "pending", className: "status-pending" };
+    default:
+      return { label: "not required", className: "status-awaiting_confirmation" };
+  }
 }
 
 async function parseApiError(response: Response) {
@@ -36,6 +51,10 @@ function OrderSnapshot({ request }: { request: SalesOrderRequest }) {
 }
 
 function LedgerDetails({ request }: { request: SalesOrderRequest }) {
+  const odooLedger = getOdooStatusMeta(request.odooLedgerSyncStatus);
+  const odooSalesOrder = getOdooStatusMeta(request.odooSalesOrderSyncStatus);
+  const odooError = request.odooSalesOrderSyncError ?? request.odooLedgerSyncError;
+
   return (
     <div className="summary-card">
       <div className="panel-header">
@@ -55,6 +74,21 @@ function LedgerDetails({ request }: { request: SalesOrderRequest }) {
         <span>Ship to site address</span>
       </div>
       <p>{request.gstBillingAddress ?? "Billing address not captured"}</p>
+      {request.gstin ? (
+        <>
+          <div className="row-meta mt-12">
+            <span>
+              Odoo ledger <span className={`status-badge ${odooLedger.className}`}>{odooLedger.label}</span>
+            </span>
+            <span>
+              Odoo sales order <span className={`status-badge ${odooSalesOrder.className}`}>{odooSalesOrder.label}</span>
+            </span>
+            <span>{request.odooPartnerId ? `Partner #${request.odooPartnerId}` : "Partner not posted"}</span>
+            <span>{request.odooSaleOrderName ?? "Sales order not posted"}</span>
+          </div>
+          {odooError ? <div className="warning-box mt-12">Odoo sync note: {odooError}</div> : null}
+        </>
+      ) : null}
     </div>
   );
 }

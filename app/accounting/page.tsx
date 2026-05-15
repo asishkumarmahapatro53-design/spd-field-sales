@@ -56,6 +56,7 @@ export default async function AccountingPage() {
         salesOrderRequests={data.salesOrderRequests}
         customerAccounts={data.customerAccounts}
         customerLedgerEntries={data.customerLedgerEntries}
+        documentTemplates={data.documentTemplates}
       />
     </AppShell>
   );

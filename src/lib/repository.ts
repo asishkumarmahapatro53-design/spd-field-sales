@@ -24,6 +24,13 @@ import { sendGmail } from "@/lib/gmail-smtp";
 import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
 import { extractPanFromGstin, isValidGstin, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
 import { findMixDesignForOrder, getDefaultMixDesignRecipe, parseSlumpMm } from "@/lib/mix-design";
+import {
+  createOdooSaleOrderForSalesOrder,
+  formatOdooError,
+  isOdooConfigured,
+  shouldSyncSalesOrderToOdoo,
+  upsertOdooPartnerForSalesOrder,
+} from "@/lib/odoo";
 import { ocrService } from "@/lib/ocr";
 import { getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import { saveGeneratedBuffer } from "@/lib/storage";
@@ -35,6 +42,7 @@ import type {
   AuditLogEntry,
   BatcherDashboardData,
   Database,
+  DocumentTemplateType,
   ExpectedSupplyWindow,
   HelpRequest,
   InformalQuotationLineItem,
@@ -142,6 +150,153 @@ function logAudit(database: Database, actor: User, entityType: string, entityId:
   };
 
   database.auditLogs.unshift(entry);
+}
+
+async function patchOdooSyncFields(
+  actor: User,
+  requestId: string,
+  patch: Partial<SalesOrderRequest>,
+  action: string,
+  detail: string,
+) {
+  await updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+    if (!request) {
+      return;
+    }
+
+    Object.assign(request, patch);
+
+    if (typeof patch.odooPartnerId === "number") {
+      const account = findCustomerAccountByName(database.customerAccounts ?? [], request.customerName);
+      if (account) {
+        account.odooPartnerId = patch.odooPartnerId;
+      }
+    }
+
+    logAudit(database, actor, "SalesOrderRequest", request.id, action, detail);
+  });
+}
+
+async function syncOdooLedgerAfterFinanceReview(actor: User, request: SalesOrderRequest) {
+  if (!shouldSyncSalesOrderToOdoo(request)) {
+    return request;
+  }
+
+  if (!isOdooConfigured()) {
+    const patch: Partial<SalesOrderRequest> = {
+      odooLedgerSyncStatus: "SKIPPED",
+      odooLedgerSyncError: "Odoo is not configured. Add ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_API_KEY.",
+      odooLedgerSyncedAt: null,
+    };
+    Object.assign(request, patch);
+    await patchOdooSyncFields(
+      actor,
+      request.id,
+      patch,
+      "ODOO_LEDGER_SYNC_SKIPPED",
+      "Skipped Odoo ledger sync because Odoo is not configured.",
+    );
+    return request;
+  }
+
+  try {
+    const result = await upsertOdooPartnerForSalesOrder(request);
+    const syncedAt = nowIso();
+    const patch: Partial<SalesOrderRequest> = {
+      odooPartnerId: result.partnerId,
+      odooLedgerSyncStatus: "SYNCED",
+      odooLedgerSyncError: null,
+      odooLedgerSyncedAt: syncedAt,
+    };
+    Object.assign(request, patch);
+    await patchOdooSyncFields(
+      actor,
+      request.id,
+      patch,
+      "ODOO_LEDGER_SYNCED",
+      `Synced Odoo customer ledger base with partner #${result.partnerId}.`,
+    );
+  } catch (error) {
+    const patch: Partial<SalesOrderRequest> = {
+      odooLedgerSyncStatus: "FAILED",
+      odooLedgerSyncError: formatOdooError(error),
+      odooLedgerSyncedAt: null,
+    };
+    Object.assign(request, patch);
+    await patchOdooSyncFields(
+      actor,
+      request.id,
+      patch,
+      "ODOO_LEDGER_SYNC_FAILED",
+      `Odoo ledger sync failed: ${patch.odooLedgerSyncError}`,
+    );
+  }
+
+  return request;
+}
+
+async function syncOdooSalesOrderAfterCreation(actor: User, request: SalesOrderRequest) {
+  if (!shouldSyncSalesOrderToOdoo(request)) {
+    return request;
+  }
+
+  if (!isOdooConfigured()) {
+    const patch: Partial<SalesOrderRequest> = {
+      odooSalesOrderSyncStatus: "SKIPPED",
+      odooSalesOrderSyncError: "Odoo is not configured. Add ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_API_KEY.",
+      odooSalesOrderSyncedAt: null,
+    };
+    Object.assign(request, patch);
+    await patchOdooSyncFields(
+      actor,
+      request.id,
+      patch,
+      "ODOO_SALES_ORDER_SYNC_SKIPPED",
+      "Skipped Odoo sales order sync because Odoo is not configured.",
+    );
+    return request;
+  }
+
+  try {
+    const result = await createOdooSaleOrderForSalesOrder(request);
+    const syncedAt = nowIso();
+    const patch: Partial<SalesOrderRequest> = {
+      odooPartnerId: result.partnerId,
+      odooSaleOrderId: result.saleOrderId,
+      odooSaleOrderName: result.saleOrderName,
+      odooSalesOrderSyncStatus: "SYNCED",
+      odooSalesOrderSyncError: null,
+      odooSalesOrderSyncedAt: syncedAt,
+      odooLedgerSyncStatus: "SYNCED",
+      odooLedgerSyncError: null,
+      odooLedgerSyncedAt: request.odooLedgerSyncedAt ?? syncedAt,
+    };
+    Object.assign(request, patch);
+    await patchOdooSyncFields(
+      actor,
+      request.id,
+      patch,
+      "ODOO_SALES_ORDER_SYNCED",
+      `Synced Odoo sales order ${result.saleOrderName} (#${result.saleOrderId}).`,
+    );
+  } catch (error) {
+    const patch: Partial<SalesOrderRequest> = {
+      odooSalesOrderSyncStatus: "FAILED",
+      odooSalesOrderSyncError: formatOdooError(error),
+      odooSalesOrderSyncedAt: null,
+    };
+    Object.assign(request, patch);
+    await patchOdooSyncFields(
+      actor,
+      request.id,
+      patch,
+      "ODOO_SALES_ORDER_SYNC_FAILED",
+      `Odoo sales order sync failed: ${patch.odooSalesOrderSyncError}`,
+    );
+  }
+
+  return request;
 }
 
 function sortLeads(leads: Lead[]) {
@@ -1693,6 +1848,13 @@ export async function decideInformalQuotationRequest(
       throw new Error("Choose whether to approve or reject this informal quotation.");
     }
 
+    if (
+      status === "APPROVED" &&
+      !(database.documentTemplates ?? []).some((template) => template.type === "QUOTATION" && template.status === "ACTIVE")
+    ) {
+      throw new Error("Upload and activate a quotation template before approving and releasing quotations.");
+    }
+
     request.status = status;
     request.decisionNote = decisionNote.trim() || (status === "APPROVED" ? "Approved by manager." : "Rejected by manager.");
     request.decidedBy = user.id;
@@ -1726,10 +1888,18 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
   const salesAgent = database.users.find((entry) => entry.id === request.createdBy) ?? null;
   const managerUser = database.users.find((entry) => entry.id === request.decidedBy) ?? manager;
   const plant = database.plants.find((entry) => entry.id === request.plantId) ?? null;
+  const quotationTemplate =
+    (database.documentTemplates ?? [])
+      .filter((template) => template.type === "QUOTATION" && template.status === "ACTIVE")
+      .sort((left, right) => compareIsoAsc(right.uploadedAt, left.uploadedAt))[0] ?? null;
   let pdfBuffer: Buffer;
 
   try {
-    pdfBuffer = generateInformalQuotationPdf({ quotation: request, plant, manager: managerUser, salesAgent });
+    if (!quotationTemplate) {
+      throw new Error("Upload and activate a quotation template before approving and releasing quotations.");
+    }
+
+    pdfBuffer = generateInformalQuotationPdf({ quotation: request, plant, manager: managerUser, salesAgent, template: quotationTemplate });
     const fileName = getInformalQuotationPdfFileName(request);
     const storedPdf = await saveGeneratedBuffer({
       buffer: pdfBuffer,
@@ -2048,6 +2218,15 @@ export async function createSalesOrderRequest(
       gstVerifiedAt: null,
       gstVerificationNote: null,
       agentGstConfirmedAt: gstin && input.agentGstConfirmed ? nowIso() : null,
+      odooPartnerId: null,
+      odooLedgerSyncStatus: "NOT_REQUIRED",
+      odooLedgerSyncError: null,
+      odooLedgerSyncedAt: null,
+      odooSaleOrderId: null,
+      odooSaleOrderName: null,
+      odooSalesOrderSyncStatus: "NOT_REQUIRED",
+      odooSalesOrderSyncError: null,
+      odooSalesOrderSyncedAt: null,
       shippingAddress: site.siteAddress,
       plannedCastingType,
       actualCastingType: "DUMP",
@@ -2099,7 +2278,7 @@ export async function reviewSalesOrderRequestByAccounting(
 ) {
   assertRole(user, ["ACCOUNTING"]);
 
-  return updateDatabase((database) => {
+  const orderRequest = await updateDatabase((database) => {
     const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
 
     if (!request) {
@@ -2124,6 +2303,12 @@ export async function reviewSalesOrderRequestByAccounting(
       request.gstVerificationStatus = "REJECTED";
       request.gstVerificationNote = note || "Accounts rejected the customer legal details.";
     }
+    request.odooLedgerSyncStatus = shouldSyncSalesOrderToOdoo(request) ? "PENDING" : "NOT_REQUIRED";
+    request.odooLedgerSyncError = null;
+    request.odooLedgerSyncedAt = null;
+    request.odooSalesOrderSyncStatus = "NOT_REQUIRED";
+    request.odooSalesOrderSyncError = null;
+    request.odooSalesOrderSyncedAt = null;
 
     if (status === "FINANCE_VERIFIED") {
       database.customerAccounts ??= [];
@@ -2173,12 +2358,14 @@ export async function reviewSalesOrderRequestByAccounting(
 
     return request;
   });
+
+  return syncOdooLedgerAfterFinanceReview(user, orderRequest);
 }
 
 export async function createSalesOrderFromLedgerByAccounting(user: User, requestId: string, note: string) {
   assertRole(user, ["ACCOUNTING"]);
 
-  return updateDatabase((database) => {
+  const orderRequest = await updateDatabase((database) => {
     const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
 
     if (!request) {
@@ -2210,6 +2397,9 @@ export async function createSalesOrderFromLedgerByAccounting(user: User, request
       note.trim() ||
       "Accounts created the sales order from the verified customer ledger and sent it to production.";
     request.status = "SCHEDULE_PENDING";
+    request.odooSalesOrderSyncStatus = shouldSyncSalesOrderToOdoo(request) ? "PENDING" : "NOT_REQUIRED";
+    request.odooSalesOrderSyncError = null;
+    request.odooSalesOrderSyncedAt = null;
 
     logAudit(
       database,
@@ -2222,6 +2412,8 @@ export async function createSalesOrderFromLedgerByAccounting(user: User, request
 
     return request;
   });
+
+  return syncOdooSalesOrderAfterCreation(user, orderRequest);
 }
 
 export async function submitScheduleRequest(
@@ -2546,6 +2738,7 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
     priceBenchmarks: [],
     customerAccounts: [],
     customerInvoices: [],
+    documentTemplates: [],
     mixDesigns: [],
     dispatchRecords: [],
     commissionVouchers: [],
@@ -2757,6 +2950,7 @@ async function getAccountingScopedDashboardDatabase() {
     customerAccounts,
     customerLedgerEntries,
     dispatchRecords,
+    documentTemplates,
   ] = await Promise.all([
     readCollection("users"),
     readCollection("plants"),
@@ -2768,6 +2962,7 @@ async function getAccountingScopedDashboardDatabase() {
     readCollection("customerAccounts", { limit }),
     readCollection("customerLedgerEntries", { limit }),
     readCollection("dispatchRecords", { limit }),
+    readCollection("documentTemplates", { limit }),
   ]);
   const sessionIds = workdaySessions.map((entry) => entry.id);
   const [readings, siteVisits] = await Promise.all([
@@ -2788,6 +2983,7 @@ async function getAccountingScopedDashboardDatabase() {
     customerAccounts,
     customerLedgerEntries,
     dispatchRecords,
+    documentTemplates,
   });
 }
 
@@ -2887,6 +3083,7 @@ export async function getManagerDashboardData(user: User): Promise<ManagerDashbo
     priceBenchmarks: database.priceBenchmarks,
     customerAccounts: database.customerAccounts,
     customerInvoices: database.customerInvoices,
+    documentTemplates: database.documentTemplates,
   };
 }
 
@@ -2909,7 +3106,17 @@ export async function getAccountingDashboardData(user: User): Promise<Accounting
       salesOrderRequests: database.salesOrderRequests ?? [],
       dispatchRecords: database.dispatchRecords ?? [],
     }),
+    documentTemplates: [...(database.documentTemplates ?? [])].sort((left, right) => compareIsoAsc(right.uploadedAt, left.uploadedAt)),
   };
+}
+
+export async function getActiveDocumentTemplate(type: DocumentTemplateType) {
+  const templates = await readCollection("documentTemplates", { filters: [{ field: "type", op: "==", value: type }], limit: 20 });
+  return (
+    templates
+      .filter((template) => template.status === "ACTIVE")
+      .sort((left, right) => compareIsoAsc(right.uploadedAt, left.uploadedAt))[0] ?? null
+  );
 }
 
 export async function getBatcherDashboardData(user: User): Promise<BatcherDashboardData> {

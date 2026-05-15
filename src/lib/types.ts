@@ -34,6 +34,9 @@ export type DispatchInvoiceStatus = "NOT_REQUESTED" | "REQUESTED" | "POSTED" | "
 export type CommissionVoucherStatus = "DRAFT" | "APPROVED" | "EXPORTED_TO_TALLY";
 export type LedgerEntryType = "DEBIT" | "CREDIT";
 export type LedgerPaymentMode = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "AUTO_DISPATCH" | "ADVANCE_RECEIPT";
+export type OdooSyncStatus = "NOT_REQUIRED" | "PENDING" | "SYNCED" | "FAILED" | "SKIPPED";
+export type DocumentTemplateType = "QUOTATION" | "CHALLAN" | "INVOICE";
+export type DocumentTemplateStatus = "ACTIVE" | "INACTIVE";
 export type CommissionRecipientType = "SALES_AGENT" | "THIRD_PARTY";
 export type RequestPriority = "NORMAL" | "URGENT";
 export type SalesOrderRequestStatus =
@@ -350,6 +353,7 @@ export interface CustomerAccount {
   id: string;
   plantId: string;
   customerName: string;
+  odooPartnerId: number | null;
   whatsappNumber: string;
   creditLimit: number;
   creditPeriodDays: number;
@@ -368,6 +372,18 @@ export interface CustomerInvoice {
   dueAt: string;
   status: InvoiceStatus;
   paidAt: string | null;
+}
+
+export interface DocumentTemplate {
+  id: string;
+  type: DocumentTemplateType;
+  name: string;
+  fileUrl: string;
+  fileMimeType: string;
+  originalFileName: string;
+  status: DocumentTemplateStatus;
+  uploadedBy: string;
+  uploadedAt: string;
 }
 
 /** A single debit or credit entry in a customer's unified ledger. */
@@ -421,6 +437,15 @@ export interface SalesOrderRequest {
   gstVerifiedAt: string | null;
   gstVerificationNote: string | null;
   agentGstConfirmedAt: string | null;
+  odooPartnerId: number | null;
+  odooLedgerSyncStatus: OdooSyncStatus;
+  odooLedgerSyncError: string | null;
+  odooLedgerSyncedAt: string | null;
+  odooSaleOrderId: number | null;
+  odooSaleOrderName: string | null;
+  odooSalesOrderSyncStatus: OdooSyncStatus;
+  odooSalesOrderSyncError: string | null;
+  odooSalesOrderSyncedAt: string | null;
   shippingAddress: string;
   plannedCastingType: CastingType;
   actualCastingType: CastingType;
@@ -596,6 +621,7 @@ export interface Database {
   priceBenchmarks: PlantPriceBenchmark[];
   customerAccounts: CustomerAccount[];
   customerInvoices: CustomerInvoice[];
+  documentTemplates: DocumentTemplate[];
   salesOrderRequests: SalesOrderRequest[];
   reimbursementClaims: ReimbursementClaim[];
   // RMC Phase 1 additions
@@ -665,6 +691,7 @@ export interface ManagerDashboardData {
   priceBenchmarks: PlantPriceBenchmark[];
   customerAccounts: CustomerAccount[];
   customerInvoices: CustomerInvoice[];
+  documentTemplates: DocumentTemplate[];
 }
 
 export interface AccountingDashboardData {
@@ -678,6 +705,7 @@ export interface AccountingDashboardData {
   agents: User[];
   customerAccounts: CustomerAccount[];
   customerLedgerEntries: CustomerLedgerEntry[];
+  documentTemplates: DocumentTemplate[];
 }
 
 export interface BatcherDashboardData {

@@ -297,6 +297,7 @@ function createCustomerAccountSeeds() {
       id: randomUUID(),
       plantId: DEFAULT_PLANT_IDS[0],
       customerName: "JRM Buildcon",
+      odooPartnerId: null,
       whatsappNumber: "+919876500111",
       creditLimit: 1200000,
       creditPeriodDays: 30,
@@ -308,6 +309,7 @@ function createCustomerAccountSeeds() {
       id: randomUUID(),
       plantId: DEFAULT_PLANT_IDS[1],
       customerName: "Sai Infra Projects",
+      odooPartnerId: null,
       whatsappNumber: "+919876500222",
       creditLimit: 1450000,
       creditPeriodDays: 35,
@@ -319,6 +321,7 @@ function createCustomerAccountSeeds() {
       id: randomUUID(),
       plantId: DEFAULT_PLANT_IDS[2],
       customerName: "Nexus Constructions",
+      odooPartnerId: null,
       whatsappNumber: "+919876500333",
       creditLimit: 980000,
       creditPeriodDays: 28,
@@ -421,6 +424,7 @@ function createSeedDatabase(): Database {
     priceBenchmarks: createPriceBenchmarkSeeds(),
     customerAccounts,
     customerInvoices: createCustomerInvoiceSeeds(customerAccounts.map((entry) => entry.id)),
+    documentTemplates: [],
     mixDesigns: [],
     dispatchRecords: [],
     commissionVouchers: [],
@@ -527,7 +531,11 @@ function normalizeDatabase(rawDatabase: Database) {
   database.materialCostSnapshots ??= createMaterialCostSeeds();
   database.priceBenchmarks ??= createPriceBenchmarkSeeds();
   database.customerAccounts ??= createCustomerAccountSeeds();
+  database.customerAccounts.forEach((account) => {
+    account.odooPartnerId ??= null;
+  });
   database.customerInvoices ??= createCustomerInvoiceSeeds(database.customerAccounts.map((entry) => entry.id));
+  database.documentTemplates ??= [];
   database.users ??= [];
   if (!database.users.some((entry) => entry.employeeId === "MD5001")) {
     database.users.push(createMixDesignUserSeed());
@@ -744,6 +752,15 @@ function normalizeDatabase(rawDatabase: Database) {
     request.gstVerifiedAt ??= null;
     request.gstVerificationNote ??= null;
     request.agentGstConfirmedAt ??= null;
+    request.odooPartnerId ??= null;
+    request.odooLedgerSyncStatus ??= request.gstin && request.gstVerificationStatus === "VERIFIED" ? "PENDING" : "NOT_REQUIRED";
+    request.odooLedgerSyncError ??= null;
+    request.odooLedgerSyncedAt ??= null;
+    request.odooSaleOrderId ??= null;
+    request.odooSaleOrderName ??= null;
+    request.odooSalesOrderSyncStatus ??= request.gstin && request.gstVerificationStatus === "VERIFIED" ? "PENDING" : "NOT_REQUIRED";
+    request.odooSalesOrderSyncError ??= null;
+    request.odooSalesOrderSyncedAt ??= null;
     request.shippingAddress ??= request.siteAddress ?? linkedSite?.siteAddress ?? "";
     request.plannedCastingType ??= normalizeCastingType(linkedApproval?.castingType ?? (request.pumpRequired ? "Pump" : "Dump"));
     request.pumpDispatchStatus ??= "NOT_DISPATCHED";
@@ -797,6 +814,7 @@ function normalizeDatabase(rawDatabase: Database) {
   });
   database.commissionVouchers ??= [];
   database.customerLedgerEntries ??= [];
+  database.documentTemplates ??= [];
 
   database.reimbursementClaims ??= [];
   (database.reimbursementClaims ?? []).forEach((claim) => {
@@ -863,6 +881,7 @@ const COLLECTION_NAMES = [
   "priceBenchmarks",
   "customerAccounts",
   "customerInvoices",
+  "documentTemplates",
   // RMC Phase 1
   "mixDesigns",
   "dispatchRecords",

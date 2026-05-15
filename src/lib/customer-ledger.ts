@@ -27,6 +27,7 @@ export function createCustomerAccountFromSalesOrder(id: string, request: SalesOr
     id,
     plantId: request.plantId,
     customerName: request.customerName.trim(),
+    odooPartnerId: request.odooPartnerId ?? null,
     whatsappNumber: request.receiverPhone.trim(),
     creditLimit: request.paymentType === "CREDIT" ? Math.max(0, request.amount) : 0,
     creditPeriodDays: request.paymentType === "CREDIT" ? 30 : 0,
