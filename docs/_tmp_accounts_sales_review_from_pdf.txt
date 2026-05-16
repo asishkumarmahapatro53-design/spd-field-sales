@@ -1,0 +1,738 @@
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+SPD Concrete Application
+Accounts Module - Sales Department Workflow Review
+Current Workflow, Missing Controls, Approved Fixes, Safeguards, Legal-Validity Notes, and Automation Potential
+Prepared for: SPD Concrete internal workflow discussion | Updated on: 16 May 2026
+1. Scope of This Document
+This document covers only the Accounts module Sales Department section of the SPD Concrete application. It
+records the current UI workflow observed in the application, the missing controls/loopholes identified, the approved
+fixes decided in discussion, the control words/status labels to be used in the application, a practical legal-validity
+assessment for Indian GST and accounting workflow purposes, and the automation potential of the workflow.
+Important note: This is a workflow and compliance design note, not a substitute for advice from the company
+CA, GST practitioner, or legal advisor. The software can make the process safer, but final legal validity
+depends on correct statutory invoicing, e-invoicing, e-way billing, tax returns, book entries, and audit
+practices.
+2. Current Accounts Sales Department Workflow in the UI
+The current Accounts Sales Department UI has two major areas: Sales Reimbursements and Ledger & Sales Order
+Desk. The Ledger & Sales Order Desk is further divided into Create New Ledger, Create Sales Order, and Sales
+Order Pipeline.
+Area Current UI purpose Current key action/status
+Sales Reimbursements Accounts reviews pending reimbursement
+claims for sales agents. Fuel is calculated at
+4.5/km and lunch is added per verified	₹
+workday.
+Current flow uses Send OTP -> Verify OTP
+-> Paid.
+Create New Ledger Sales order requests from Sales Agent first
+arrive here when finance review is pending.
+Status: PENDING_FINANCE. Accounts
+can Create Ledger or Reject.
+Create Sales Order After ledger creation, the same request waits
+here for Accounts to create the sales order.
+Status: FINANCE_VERIFIED. Accounts
+clicks Create Sales Order.
+Sales Order Pipeline Accounts tracks recent orders after Accounts
+action, including production decisions.
+Shows post-Accounts statuses such as
+SCHEDULE_PENDING and
+SCHEDULE_APPROVED.
+3. Current Sales Reimbursement Workflow
+Current workflow chain: Sales agent creates/claims reimbursement -> claim appears in Accounts pending claims ->
+Accounts sends OTP -> OTP is entered in Accounts -> claim becomes paid.
+Current data visible to Accounts includes agent, claim period, total amount, daily start/end odometer reading,
+distance, fuel amount, lunch amount, status, and export options for CSV/XLSX.
+3.1 Approved Fixes for Sales Reimbursement Loopholes
+No. Current missing part /
+loophole Approved fix Control words/status
+labels to use Safety improvement
+1 OTP alone does not Because reimbursement Create Cash Voucher; Very high. Cash voucher
+
+-- 1 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+prove actual payment. It
+only proves OTP
+confirmation, not cash
+handover or accountant
+accountability.
+is provided in cash
+format, the system must
+always create a Cash
+Voucher before OTP
+verification. The voucher
+must capture accountant
+details who provided the
+cash. OTP continues
+after voucher creation as
+recipient confirmation.
+Cash Voucher No.; Cash
+Paid By; Cash Received
+By; Accountant ID;
+Voucher Created; OTP
+Pending; OTP Verified;
+Paid
++ accountant identity +
+OTP creates a stronger
+audit trail than OTP
+alone.
+2 No partial payment
+option. Current flow
+behaves like full paid
+after OTP.
+Add Full Payment,
+Partial Payment, Hold
+Payment, and Reject
+Payment. If partial
+payment is made,
+balance remains
+outstanding.
+FULL_PAYMENT;
+PARTIAL_PAYMENT;
+PAYMENT_HOLD;
+PAYMENT_REJECTED
+;
+BALANCE_OUTSTAN
+DING
+High. Prevents false
+closing of partially
+settled claims.
+3 No mandatory
+accountant remarks
+before
+approving/rejecting or
+modifying
+reimbursement.
+Add mandatory remarks
+for approval, rejection,
+hold, and partial
+payment.
+Accountant Remarks;
+Reason for Hold; Reason
+for Rejection;
+Adjustment Note
+High. Creates traceability
+and reduces verbal/off-
+system decisions.
+4 Manager verification and
+Accounts payment
+confirmation are not
+clearly separated.
+Use a staged flow: claim
+request -> manager
+verification -> accounts
+payment pending -> cash
+voucher created -> OTP
+sent -> agent receipt
+confirmed -> paid.
+CLAIM_REQUESTED;
+MANAGER_VERIFIED
+;
+ACCOUNTS_PAYMEN
+T_PENDING;
+CASH_VOUCHER_CR
+EATED; OTP_SENT;
+AGENT_RECEIPT_CO
+NFIRMED; PAID
+Very high. Separates
+operational approval
+from cash disbursement.
+3.2 Final Improved Sales Reimbursement Workflow
+1. Sales agent submits reimbursement claim based on verified workdays.
+2. Manager verifies or corrects the claim amount and forwards it to Accounts.
+3. Accounts selects payment type: full, partial, hold, or reject.
+4. For cash payment, Accounts must generate a cash voucher before OTP is sent.
+5. Cash voucher must record voucher number, claim ID, agent, paid amount, cash paid by accountant, payment
+date/time, accountant employee ID, and remarks.
+6. After cash voucher creation, OTP is sent to the agent for receipt confirmation.
+7. After OTP verification, the claim is marked paid or partially paid based on actual amount paid.
+8. If partial payment is made, the balance remains in outstanding ledger.
+4. Current Create New Ledger Workflow
+Current workflow chain: Sales order request reaches Accounts with status PENDING_FINANCE -> Accounts
+checks visible documents and request details -> Accounts clicks Create Ledger -> request status becomes
+FINANCE_VERIFIED -> request moves to Create Sales Order. If rejected, status becomes FINANCE_REJECTED.
+Current UI shows customer name, site, grade, quantity, amount, payment type, payment terms, receiver details,
+required date, PO/PDC/GST certificate links, payment confirmation, GSTIN/PAN/legal name/billing address, and
+Odoo ledger/sales order sync status.
+4.1 Approved Fixes for Create New Ledger Loopholes
+No. Current missing part /
+loophole Approved fix Control words/status
+labels to use Safety improvement
+
+-- 2 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+1 The Create Ledger button
+is too direct. PO/PDC
+and finance documents
+may be missing.
+If PO or PDC is missing
+where required, manager
+approval is mandatory
+before ledger creation
+and before sales order
+creation. For GST
+clients, use Odoo ledger.
+For non-GST clients,
+create internal ledger in
+the app.
+PO_MISSING;
+PDC_MISSING;
+MANAGER_EXCEPTI
+ON_REQUIRED;
+MANAGER_EXCEPTI
+ON_APPROVED;
+GST_CLIENT_ODOO_
+LEDGER;
+NON_GST_INTERNAL
+_LEDGER
+Very high. Prevents
+Accounts from bypassing
+document deficiencies
+without managerial
+accountability.
+2 Payment confirmed is
+displayed, but payment
+proof/receipt details are
+not strongly verified.
+Add payment verification
+fields: amount received,
+mode, UTR/cheque/cash
+voucher no., date, proof
+upload, bank/cash
+account, verified by, and
+difference from order
+amount.
+PAYMENT_VERIFIED;
+PAYMENT_NOT_VERI
+FIED;
+UTR_REQUIRED;
+CHEQUE_NO_REQUIR
+ED;
+CASH_VOUCHER_RE
+QUIRED;
+PAYMENT_PROOF_U
+PLOADED
+Very high. Supports
+audit and reduces
+fake/uncertain payment
+confirmation.
+3 Duplicate
+customer/ledger creation
+risk exists.
+If GSTIN matches an
+existing GST ledger, link
+the request to the existing
+ledger or create a new
+site under that ledger. If
+GST does not match or
+no existing record is
+found, create a new
+ledger.
+GST_MATCH_FOUND;
+LINK_EXISTING_LED
+GER;
+CREATE_NEW_SITE;
+GST_NO_MATCH;
+CREATE_NEW_LEDG
+ER
+High. Reduces duplicate
+customer accounts and
+improves receivable
+tracking.
+4 Credit sale control is
+weak.
+Add existing outstanding,
+overdue, last payment
+date, credit limit,
+available credit, PO/PDC
+status, and higher
+approval when limit is
+exceeded. Additional
+decision: Sales Manager
+will assign the credit
+limit from the manager
+dashboard.
+CREDIT_LIMIT_ASSIG
+NED_BY_MANAGER;
+AVAILABLE_CREDIT;
+OVER_LIMIT;
+OVERDUE_AMOUNT;
+HIGHER_APPROVAL_
+REQUIRED
+Very high. Controls
+credit risk before
+production commitment.
+4.2 Required Manager Dashboard Addition for Credit Limit
+A new section must be added in the Sales Manager dashboard for assigning and reviewing customer credit limits.
+This is required because Accounts should not decide commercial risk alone, and Sales Manager must take
+responsibility for business credit exposure.
+Manager dashboard field/action Purpose
+Customer / GST ledger / internal ledger selector Select the customer whose credit limit is being assigned.
+Credit limit amount Maximum approved outstanding exposure for the customer.
+Credit period Allowed days before payment becomes overdue.
+Risk category Low, Medium, High, Blocked.
+Reason / remarks Mandatory explanation for assigning or increasing credit.
+Approval history Shows who assigned/changed the credit limit and when.
+Temporary exception approval Allows one order beyond credit limit with recorded manager
+approval.
+4.3 Final Improved Create Ledger Workflow
+9. Accounts opens the PENDING_FINANCE request.
+10. System checks whether the customer is GST or non-GST.
+11. For GST clients, the system checks GSTIN and searches Odoo/existing GST ledgers.
+
+-- 3 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+12. If GSTIN matches, Accounts links the existing ledger or creates a new site under the existing ledger.
+13. If GSTIN does not match, Accounts creates a new Odoo ledger for the GST client after verification.
+14. For non-GST clients, the system creates an internal app ledger instead of an Odoo ledger.
+15. System checks whether PO/PDC is required and uploaded.
+16. If PO/PDC is missing, manager exception approval is mandatory before ledger creation and before sales order
+creation.
+17. Accounts verifies payment proof, UTR/cheque/cash voucher, payment date, and received amount.
+18. System checks outstanding, overdue, and manager-assigned credit limit.
+19. Accounts adds mandatory remarks and approves or rejects ledger creation.
+5. Current Create Sales Order Workflow
+Current workflow chain: Request has status FINANCE_VERIFIED -> Accounts clicks Create Sales Order -> the
+system sends it to Production Manager -> status becomes SCHEDULE_PENDING. The current UI action is
+functional but needs a stronger final pre-check before production receives the order.
+5.1 Approved Fixes for Create Sales Order Loopholes
+No. Current missing part /
+loophole Approved fix Control words/status
+labels to use Safety improvement
+1 Sales order can be
+created without a final
+commercial/order pre-
+check.
+Add a final confirmation
+checklist before Create
+Sales Order: grade,
+quantity, rate, payment
+terms, required date/time,
+casting type, pump/dump
+requirement, receiver,
+phone, delivery address,
+plant, tax/challan mode.
+FINAL_SO_CHECKLIS
+T;
+GRADE_CONFIRMED;
+RATE_CONFIRMED;
+RECEIVER_CONFIRM
+ED;
+PLANT_CONFIRMED;
+TAX_MODE_CONFIR
+MED
+Very high. Prevents
+wrong production
+scheduling due to wrong
+commercial or delivery
+data.
+2 Mix design link/status is
+not visible enough.
+Show mix design
+available/pending/approv
+ed/not found/grade-plant
+mismatch. Do not allow
+sales order creation if the
+required mix design is
+missing or not approved.
+MIX_DESIGN_AVAIL
+ABLE;
+MIX_DESIGN_PENDIN
+G_QC;
+MIX_DESIGN_APPRO
+VED;
+MIX_DESIGN_NOT_F
+OUND;
+GRADE_PLANT_MIS
+MATCH
+Very high. Prevents
+dispatch planning
+without correct QC/mix
+design basis.
+3 No proper sales order
+preview before sending
+to production.
+Add sales order preview
+and downloadable
+internal/customer/produc
+tion copies before final
+submission.
+PREVIEW_SALES_OR
+DER;
+DOWNLOAD_CUSTO
+MER_COPY;
+DOWNLOAD_PRODU
+CTION_COPY;
+FINAL_SUBMIT_TO_P
+RODUCTION
+High. Reduces wrong or
+disputed orders before
+production stage.
+5.2 Final Improved Create Sales Order Workflow
+20. Request reaches Create Sales Order section only after ledger/finance verification.
+21. System checks whether PO/PDC exception approval is still required and already approved.
+22. System validates grade, quantity, rate, site address, receiver, phone, required date/time, plant, and casting type.
+23. System checks mix design availability and approval for the selected grade and plant.
+24. Accounts previews the sales order document before final action.
+25. Accounts adds final remarks and clicks Create Sales Order.
+26. System generates sales order record and sends it to Production Manager as SCHEDULE_PENDING.
+
+-- 4 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+6. Current Sales Order Pipeline Workflow
+Current pipeline shows recent orders after Accounts action and production decisions. It is useful for tracking but not
+detailed enough for Accounts control after dispatch begins.
+6.1 Approved Fix for Sales Order Pipeline Loophole
+Current missing part /
+loophole Approved fix Control words/status labels to
+use Safety improvement
+Pipeline does not show enough
+Accounts-relevant post-order
+details such as dispatch quantity,
+remaining quantity,
+challan/invoice status, site
+acceptance, ledger debit, and
+outstanding amount.
+Expand pipeline columns to
+show production status,
+dispatched quantity, remaining
+quantity, challan status,
+invoice/e-invoice status, e-way
+bill status, customer ledger debit
+status, payment received, and
+outstanding balance.
+PRODUCTION_STATUS;
+DISPATCHED_QTY;
+REMAINING_QTY;
+CHALLAN_GENERATED;
+INVOICE_PENDING;
+IRN_GENERATED;
+EWAY_BILL_GENERATED;
+LEDGER_DEBIT_POSTED;
+OUTSTANDING_BALANCE
+Very high. Accounts can
+monitor whether commercial,
+statutory, and ledger
+consequences are complete after
+production and dispatch.
+7. Consolidated Future Sales Department Workflow
+27. Sales agent creates sales order request after manager final approval.
+28. Request reaches Accounts with PENDING_FINANCE status.
+29. Accounts checks GST/non-GST nature of client.
+30. GST clients: verify GSTIN, GST certificate, legal name, billing address, and use/link the Odoo ledger.
+31. Non-GST clients: create an internal app ledger and keep invoice mode controlled as per GST/tax policy.
+32. System checks PO/PDC/payment proof and manager exception if any required document is missing.
+33. System checks duplicate customer, existing site, outstanding balance, overdue amount, and manager-assigned
+credit limit.
+34. Accounts verifies payment details and adds mandatory remarks.
+35. Ledger is created or linked; request moves to FINANCE_VERIFIED.
+36. Accounts performs final sales order checklist, mix design check, and document preview.
+37. Accounts creates sales order; request becomes SCHEDULE_PENDING and moves to Production Manager.
+38. Pipeline tracks production approval, dispatch, challan, invoice/e-invoice/e-way bill, customer ledger posting, and
+outstanding amount.
+8. How Much Safer the Approved Workflow Becomes
+Risk area Current risk level Risk level after approved fixes Reason
+Cash reimbursement fraud /
+false paid marking
+High Low to Medium Cash voucher, accountant
+identity, OTP, remarks, and
+partial-payment tracking create
+auditable proof.
+Wrong ledger creation /
+duplicate ledger
+Medium to High Low GST matching, existing ledger
+linking, and new-site creation
+reduce duplicate accounts.
+Missing PO/PDC document
+bypass
+High Medium to Low Manager exception approval is
+required before ledger and sales
+order creation.
+Uncontrolled credit sales High Medium to Low Manager-assigned credit limit
+and outstanding/overdue checks
+block risky orders or force
+approval.
+Wrong sales order sent to
+production
+Medium to High Low Final checklist, mix design
+check, and preview reduce data
+mistakes.
+Accounts losing visibility after Medium Low Expanded pipeline shows
+
+-- 5 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+dispatch dispatch, invoice/e-way bill,
+ledger debit, and outstanding
+status.
+GST/e-invoice/e-way bill
+compliance gap
+Medium to High Medium Workflow becomes safer, but
+legal compliance still requires
+statutory API/process
+integration and CA/GST
+practitioner review.
+Overall safety assessment: After the approved changes, the Sales Department part of Accounts becomes
+approximately 75-85% safer from an internal-control perspective. The remaining 15-25% depends on implementation
+quality, user permissions, audit logs, statutory GST/e-invoice/e-way bill integration, backup policy, and real-world
+discipline by Accounts/Manager users.
+9. Legal-Validity Assessment
+The approved workflow is legally sensible as an internal control system, but it is not automatically legally complete
+merely because the app records approvals. Legal validity depends on whether the final documents and statutory
+filings meet applicable GST/accounting rules.
+9.1 Cash Reimbursement and Cash Voucher Validity
+Creating a cash voucher for every reimbursement is a strong and commonly accepted accounting control. It should
+include voucher number, date, paid-to person, amount in figures and words, purpose, claim reference, accountant
+name/ID, receiver confirmation, and remarks. For stronger audit quality, the system should also keep a printable
+voucher and immutable audit log.
+9.2 GST Client and Odoo Ledger Validity
+Using Odoo ledger for GST clients is appropriate because GST client billing needs clean statutory invoice, GSTIN,
+billing address, legal name, tax break-up, HSN, place of supply, and invoice numbering control. The official CGST
+Rule 46 tax invoice requirements include supplier GSTIN, unique serial number, date, recipient details, HSN,
+description, quantity, value, tax rate, tax amount, place of supply, delivery address where applicable, reverse-charge
+indication, signature/digital signature, and QR/IRN where applicable.
+9.3 Non-GST Client and Internal Ledger Validity
+Using an internal ledger for non-GST clients is acceptable for internal receivable tracking. However, if SPD Concrete
+is a GST registered supplier making taxable outward supply, non-GST/unregistered customer billing may still require
+a GST-compliant tax invoice or bill of supply/challan as applicable. Therefore, a non-GST client does not mean no
+statutory document is required; it only means the customer does not have GSTIN and may not require Odoo customer
+ledger posting in the same way as GST clients.
+9.4 E-Invoice and E-Way Bill Caution
+If SPD Concrete falls under e-invoicing applicability, B2B GST invoices must be reported through the Invoice
+Registration Portal/approved provider before being treated as proper e-invoice documents. For goods movement, e-
+way bill rules generally require information before movement for applicable consignments and the person in charge
+of the conveyance must carry invoice/bill of supply/delivery challan and e-way bill or e-way bill number where
+required.
+9.5 Final Legal-Validity Conclusion
+Workflow item Legal-validity position Condition for full legal strength
+Cash voucher before reimbursement OTP Generally valid as internal accounting
+evidence.
+Voucher must contain proper details,
+receiver confirmation, accountant identity,
+
+-- 6 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+and company-approved cash policy.
+Manager approval for missing PO/PDC Valid as internal authorization control. Approval reason and user identity must be
+stored immutably.
+Odoo ledger for GST clients Correct direction for statutory billing
+discipline.
+Odoo must generate GST-compliant invoice
+and integrate e-invoice/e-way bill where
+applicable.
+Internal ledger for non-GST clients Valid for internal tracking. GST invoice/bill/challan obligations must
+still be followed when supply is taxable.
+Credit limit assigned by Sales Manager Valid internal risk control. Changes must be logged with user,
+date/time, reason, and approval level.
+Sales order checklist and preview Valid internal control. Final document must match statutory and
+production records.
+Expanded pipeline tracking Valid and recommended. Pipeline should not replace statutory filing;
+it should track statutory document status.
+10. Implementation Checklist for Developer
+Priority Required upgrade Where it should appear
+P1 Add cash voucher creation before
+reimbursement OTP.
+Accounts -> Sales Reimbursements ->
+Pending Claim action.
+P1 Add partial/hold/reject reimbursement
+payment states.
+Accounts reimbursement claim model and
+UI.
+P1 Add mandatory accountant remarks. Reimbursement, ledger approval/rejection,
+and sales order creation screens.
+P1 Add PO/PDC missing manager exception
+approval.
+Create New Ledger and Create Sales Order
+pre-checks.
+P1 Split GST client to Odoo ledger and non-
+GST client to internal ledger.
+Create New Ledger logic.
+P1 Add GST match -> link existing
+ledger/create new site flow.
+Create New Ledger verification panel.
+P1 Add manager credit limit assignment
+section.
+Sales Manager dashboard.
+P1 Block over-limit/overdue orders unless
+approved.
+Accounts Create New Ledger and Create
+Sales Order.
+P2 Add mix design status panel before sales
+order creation.
+Accounts -> Create Sales Order.
+P2 Add sales order preview and downloadable
+copies.
+Accounts -> Create Sales Order.
+P2 Expand pipeline columns for dispatch,
+invoice/e-way bill, ledger and payment
+status.
+Accounts -> Sales Order Pipeline.
+P2 Add statutory status fields: IRN, QR, e-way
+bill no., e-way bill validity.
+Pipeline and dispatch/invoice records.
+11. Reference Sources Used for Legal-Validity Notes
+ CBIC / Tax Information Portal: CGST Rule 46 - tax invoice particulars including GSTIN, serial number, date,
+recipient details, HSN, description, quantity, taxable value, tax rate and tax amount, place of supply, delivery
+address, reverse charge, signature/digital signature, and IRN QR where applicable.
+ CBIC GST Portal: Electronic Way Bill rules, including requirement to furnish information before movement of
+goods for applicable consignments and requirement to carry invoice/bill/challan and e-way bill/e-way bill
+number where applicable.
+ NIC e-Invoice Notification page: e-invoicing rollout notifications and applicability expansion references.
+ SPD Concrete internal Accounts Sales Department workflow review.
+
+-- 7 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+12. Automation Potential and Human Intervention Requirement
+Because this application is mainly focused on automation, the Accounts Sales Department workflow should be
+divided into three categories: fully automated, semi-automated, and human-approval-required. The target should not
+be 100% automation of finance decisions. The safer design is to automate clean, rule-based checks and push only
+risky or exception cases to Accounts, Manager, or higher approval.
+Overall automation assessment: Around 70-80% of the Accounts Sales workflow can be automated safely without
+direct human intervention. The remaining 20-30% should stay under human control because it involves money, tax,
+legal billing risk, credit exposure, or disputed documents.
+12.1 Automation Level by Accounts Sales Workflow Area
+Workflow area Safe automation level Human intervention requirement
+Sales order request data checking 80-90% automated Human review only for missing, doubtful,
+duplicate, or mismatched data.
+Document validation: PO, PDC, GST
+certificate, payment proof
+60-80% automated Human review required when document
+content is unclear, mismatched, edited,
+missing, or commercially risky.
+Ledger creation / ledger linking 70-85% automated Human confirmation required for duplicate
+customers, similar names, non-GST
+customers, old dues, or ambiguous site
+mapping.
+Sales order creation after finance
+verification
+70-80% automated Human review required before production
+only when checklist, credit, mix design, or
+commercial terms create exceptions.
+Sales order pipeline tracking 90-100% automated Human users should decide actions, but
+status tracking itself should be automatic.
+Customer ledger debit after accepted
+dispatch
+90-100% automated Debit posting can be automatic after site
+acceptance, dispatch quantity, rate, and tax
+mode are confirmed.
+Customer payment credit entry 40-60% automated without bank integration;
+80-95% with bank integration
+Human review required for cash, cheque,
+third-party payment, amount mismatch, or
+manual receipt entry.
+Reimbursement calculation 85-95% automated Human/manager review required for blurry
+odometer images, abnormal distance,
+duplicate images, date mismatch, or
+disputed lunch/fuel claim.
+Reimbursement payment marking 40-60% automated Actual payment release should need
+accountant confirmation, cash
+voucher/UTR, and agent receipt
+confirmation/OTP.
+Credit approval / high-risk orders 20-40% automated Final approval should remain with
+Manager/Director when over-limit, overdue,
+high-value, or disputed.
+12.2 Parts That Can Be Fully Automated
+The following activities are rule-based and can be automated with very low risk if validation rules are correctly
+implemented:
+ Checking whether mandatory fields are present: customer, site, billing address, grade, quantity, rate, receiver,
+required date/time, plant, and payment type.
+ Checking GSTIN structure, PAN extraction from GSTIN, state code, and whether GST fields are complete.
+ Checking whether PO, PDC, GST certificate, and payment proof are uploaded when required.
+ Checking duplicate UTR/reference number, duplicate request, and duplicate document upload.
+ Checking whether the customer has an existing ledger by GSTIN, phone number, PAN, name, billing address, or
+site address.
+ Checking whether order quantity and rate match approved final approval terms.
+ Checking whether mix design is available and approved for selected grade and plant.
+
+-- 8 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+ Auto-generating sales order reference number, internal order ID, PDF preview, and production copy.
+ Moving clean finance-verified orders to SCHEDULE_PENDING after approved rules pass.
+ Tracking pipeline statuses: schedule pending, schedule approved, dispatch quantity, remaining quantity,
+challan/invoice status, ledger debit, and outstanding balance.
+ Posting customer ledger debit automatically after accepted dispatch.
+ Calculating reimbursement amount from verified start/end odometer readings, distance, fuel rate, lunch
+allowance, and already-paid date checks.
+12.3 Parts That Should Be Semi-Automated
+The following parts should be AI/rule-assisted, but the final decision should be made by Accounts or Manager when
+the system detects uncertainty:
+ GST legal name and billing address matching, especially when certificate, GST API, and customer-entered data
+do not perfectly match.
+ PO/PDC content verification where OCR can read customer name, PO number, quantity, grade, site,
+signature/stamp, and date, but unclear or mismatched documents require human review.
+ Advance payment verification where the app can check amount, UTR, date, and proof, but bank/API
+confirmation may still be required.
+ Ledger creation for customers with similar names, multiple sites, missing GST, or same phone number across
+different customers.
+ Credit sale checks where the system can show outstanding, overdue, credit limit, and risk category, but over-limit
+approval should be manual.
+ Reimbursement cases involving abnormal distance, late submission, OCR mismatch, duplicate image, or edited
+GPS/date watermark.
+ Customer payment credit entry without bank integration, especially cash, cheque, or third-party payment cases.
+12.4 Parts That Should Not Be Fully Automated
+The following should remain human-approved because they involve financial, legal, credit, or audit risk:
+ Final approval for over-credit-limit or overdue customer orders.
+ Approval of missing PO/PDC document exceptions.
+ Approval of GST mismatch, billing-name mismatch, or suspicious GST certificate cases.
+ Approval of high-value sales order release to production.
+ Approval of non-GST order edits, cancelled-order reuse, or repeated manual modifications.
+ Confirmation of actual cash reimbursement payment release.
+ Approval of partial payment, hold payment, or rejected reimbursement claim.
+ Any case where payment proof is unclear, UTR is missing, cheque is not realized, or payment amount does not
+match required amount.
+ Director/management approval for blocked/high-risk customers or unusual commercial exceptions.
+12.5 Recommended Automation Design: Auto-Process Clean Cases, Escalate Exceptions
+The best workflow is not to send every request manually to Accounts. Instead, the app should automatically process
+clean cases and escalate only exception cases.
+Clean case condition Recommended system action
+GST verified, customer ledger matched, no overdue, payment proof
+valid, PO/PDC present, quantity/rate match approval, mix design
+available, and no duplicate request.
+Auto-pass validation and allow fast ledger/sales order creation with
+minimal Accounts review.
+New customer, GST mismatch, missing PO/PDC, payment missing,
+credit sale, overdue balance, duplicate customer found, rate
+mismatch, quantity changed, non-GST repeated edit, or high-value
+order.
+Hold workflow and send to Accounts/Manager for manual decision
+with mandatory remarks.
+
+-- 9 of 10 --
+
+SPD Concrete | Accounts Sales Department Workflow Review | Internal document
+12.6 Suggested Automation Status Labels for Developer
+Automation stage Suggested status/control words
+Auto validation passed AUTO_VALIDATION_PASSED; CLEAN_CASE;
+READY_FOR_AUTO_PROCESS
+Exception detected EXCEPTION_DETECTED; MANUAL_REVIEW_REQUIRED;
+RISK_FLAGGED
+GST automation GST_FORMAT_VALID; GST_API_VERIFIED;
+GST_NAME_MISMATCH; GST_ADDRESS_MISMATCH
+Payment automation PAYMENT_AUTO_MATCHED;
+PAYMENT_PROOF_REQUIRED; UTR_DUPLICATE;
+BANK_MATCH_PENDING
+Ledger automation AUTO_LINK_LEDGER; DUPLICATE_LEDGER_FOUND;
+CREATE_NEW_SITE; MANUAL_LEDGER_REVIEW
+Credit automation CREDIT_WITHIN_LIMIT; OVER_LIMIT; OVERDUE_FOUND;
+HIGHER_APPROVAL_REQUIRED
+Sales order automation SO_AUTO_READY; FINAL_CHECKLIST_REQUIRED;
+MIX_DESIGN_BLOCKED; RELEASE_TO_PRODUCTION
+Reimbursement automation CLAIM_AUTO_CALCULATED; ODOMETER_EXCEPTION;
+DUPLICATE_IMAGE_FOUND;
+MANAGER_REVIEW_REQUIRED
+12.7 Final Automation Conclusion
+The Accounts Sales Department can safely automate approximately 70-80% of the workflow. The application should
+automate data checking, GST format checking, document presence checking, duplicate detection, ledger suggestions,
+clean sales order preparation, pipeline tracking, customer ledger debit posting, and reimbursement calculation.
+However, the system should not fully automate risky finance decisions. The remaining 20-30% must stay under
+human control, especially credit approval, payment confirmation, GST mismatch, duplicate ledger decision, high-
+value orders, cash reimbursement payments, non-GST order edits/cancellations, and any case where money, tax, or
+legal billing risk is involved.
+
+-- 10 of 10 --
+
