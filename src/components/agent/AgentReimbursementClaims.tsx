@@ -17,6 +17,26 @@ function isEligibleSummary(summary: ReimbursementSummary) {
   );
 }
 
+function isActiveClaim(claim: ReimbursementClaim) {
+  return claim.status !== "PAID" && claim.status !== "PAYMENT_REJECTED" && claim.status !== "REJECTED";
+}
+
+function claimLabel(claim: ReimbursementClaim) {
+  if (claim.status === "OTP_SENT") {
+    return `OTP sent at ${toIndiaTimeLabel(claim.otpSentAt)}`;
+  }
+
+  if (claim.status === "AGENT_RECEIPT_CONFIRMED") {
+    return "Receipt confirmed. Accounts will close payment.";
+  }
+
+  if (claim.status === "PARTIAL_PAYMENT" || claim.status === "BALANCE_OUTSTANDING") {
+    return `Partial payment. Balance ${money(claim.outstandingAmount ?? claim.balanceAmount ?? 0)}.`;
+  }
+
+  return claim.status.replaceAll("_", " ").toLowerCase();
+}
+
 async function parseApiError(response: Response) {
   const payload = await response.json().catch(() => ({ error: "Request failed." }));
   return payload.error ?? "Request failed.";
@@ -33,7 +53,7 @@ export function AgentReimbursementClaims({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isRefreshing, startTransition] = useTransition();
-  const activeClaim = claims.find((claim) => claim.status === "REQUESTED" || claim.status === "OTP_SENT") ?? null;
+  const activeClaim = claims.find(isActiveClaim) ?? null;
   const otpClaim = claims.find((claim) => claim.status === "OTP_SENT" && claim.otpCode) ?? null;
   const eligibleSummaries = summaries.filter(isEligibleSummary);
   const eligibleAmount = eligibleSummaries.reduce((sum, summary) => sum + (summary.totalAmount ?? 0), 0);
@@ -49,7 +69,7 @@ export function AgentReimbursementClaims({
       return;
     }
 
-    setMessage("Claim requested. Accounting will verify payment with OTP.");
+    setMessage("Claim requested. Manager verification is required before Accounts payment.");
     startTransition(() => router.refresh());
   }
 
@@ -71,7 +91,7 @@ export function AgentReimbursementClaims({
             <span className="summary-label">Accounting OTP</span>
             <strong>{otpClaim.otpCode}</strong>
           </div>
-          <p>Share this OTP with accounting after receiving {money(otpClaim.totalAmount)}.</p>
+          <p>Share this OTP with accounting after receiving voucher payment for {money(otpClaim.cashVoucherAmount ?? otpClaim.totalAmount)}.</p>
         </div>
       ) : null}
 
@@ -93,7 +113,7 @@ export function AgentReimbursementClaims({
       {activeClaim ? (
         <div className="note-box">
           Active claim {activeClaim.periodStart} to {activeClaim.periodEnd}, {money(activeClaim.totalAmount)}. Status:{" "}
-          {activeClaim.status === "OTP_SENT" ? `OTP sent at ${toIndiaTimeLabel(activeClaim.otpSentAt)}` : "Waiting for accounting"}.
+          {claimLabel(activeClaim)}.
         </div>
       ) : null}
       {message ? <div className="success-box">{message}</div> : null}

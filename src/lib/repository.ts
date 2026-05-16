@@ -1,6 +1,16 @@
 import { randomInt, randomUUID } from "node:crypto";
 import * as XLSX from "xlsx";
 import {
+  buildSalesOrderPreviewHash,
+  calculateAvailableCredit,
+  getReimbursementOutstanding,
+  isFinanceChecklistComplete,
+  isManualPaymentVerificationComplete,
+  isOpenReimbursementClaim,
+  isSalesOrderFinalChecklistComplete,
+  normalizeReimbursementStatus,
+} from "@/lib/accounts-sales";
+import {
   computeSalesOrderAmount,
   getApprovalItemById,
   getApprovalItems,
@@ -44,6 +54,8 @@ import type {
   Database,
   DocumentTemplateType,
   ExpectedSupplyWindow,
+  CreditRiskCategory,
+  LedgerDecisionStatus,
   HelpRequest,
   InformalQuotationLineItem,
   InformalQuotationPaymentType,
@@ -60,7 +72,9 @@ import type {
   OdometerReading,
   PaymentTerms,
   PaymentType,
+  PaymentVerificationMode,
   ReadingType,
+  ReimbursementPaymentMode,
   ReimbursementSummary,
   SalesOrderRequest,
   SiteVisit,
@@ -430,7 +444,7 @@ function getLastPaidThroughDate(database: Database, agentId: string) {
 function getClaimIdForSession(database: Database, sessionId: string) {
   return (
     database.reimbursementClaims.find(
-      (claim) => claim.status !== "REJECTED" && claim.lineItems.some((lineItem) => lineItem.sessionId === sessionId),
+      (claim) => normalizeReimbursementStatus(claim.status) !== "PAYMENT_REJECTED" && claim.lineItems.some((lineItem) => lineItem.sessionId === sessionId),
     )?.id ?? null
   );
 }
@@ -503,9 +517,7 @@ export async function createReimbursementClaim(user: User) {
   assertRole(user, ["SALES_AGENT"]);
 
   return updateDatabase((database) => {
-    const openClaim = database.reimbursementClaims.find(
-      (claim) => claim.agentId === user.id && (claim.status === "REQUESTED" || claim.status === "OTP_SENT"),
-    );
+    const openClaim = database.reimbursementClaims.find((claim) => claim.agentId === user.id && isOpenReimbursementClaim(claim));
 
     if (openClaim) {
       throw new Error("A reimbursement claim is already pending for this agent.");
@@ -541,7 +553,7 @@ export async function createReimbursementClaim(user: User) {
       id: randomUUID(),
       agentId: user.id,
       requestedBy: user.id,
-      status: "REQUESTED" as const,
+      status: "CLAIM_REQUESTED" as const,
       periodStart: lineItems[0]?.date ?? summaries[0]?.date ?? toDateKey(nowIso()),
       periodEnd: lineItems.at(-1)?.date ?? summaries.at(-1)?.date ?? toDateKey(nowIso()),
       lineItems,
@@ -549,20 +561,117 @@ export async function createReimbursementClaim(user: User) {
       fuelAmount,
       lunchAmount,
       totalAmount,
+      approvedAmount: totalAmount,
+      paidAmount: 0,
+      balanceAmount: totalAmount,
+      outstandingAmount: totalAmount,
       requestedAt: nowIso(),
+      managerVerifiedBy: null,
+      managerVerifiedAt: null,
+      managerVerificationNote: null,
+      accountsPaymentPendingAt: null,
+      cashVoucherNumber: null,
+      cashVoucherCreatedAt: null,
+      cashVoucherCreatedBy: null,
+      cashVoucherAmount: null,
       otpCode: null,
       otpSentAt: null,
       otpExpiresAt: null,
       otpVerifiedAt: null,
+      agentReceiptConfirmedAt: null,
       paidAt: null,
       paidBy: null,
       rejectedAt: null,
       rejectedBy: null,
+      accountantRemarks: null,
+      paymentMode: null,
+      paymentHistory: [],
       note: null,
     };
 
     database.reimbursementClaims.unshift(claim);
     logAudit(database, user, "ReimbursementClaim", claim.id, "CLAIM_REQUEST", `Requested reimbursement for ${lineItems.length} day(s).`);
+    return claim;
+  });
+}
+
+export async function verifyReimbursementClaimByManager(user: User, claimId: string, note: string) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const claim = database.reimbursementClaims.find((entry) => entry.id === claimId);
+
+    if (!claim) {
+      throw new Error("Reimbursement claim not found.");
+    }
+
+    if (normalizeReimbursementStatus(claim.status) !== "CLAIM_REQUESTED") {
+      throw new Error("Only newly requested claims can be manager verified.");
+    }
+
+    const now = nowIso();
+    claim.status = "ACCOUNTS_PAYMENT_PENDING";
+    claim.managerVerifiedBy = user.id;
+    claim.managerVerifiedAt = now;
+    claim.managerVerificationNote = note.trim() || "Manager verified the reimbursement claim.";
+    claim.accountsPaymentPendingAt = now;
+    claim.approvedAmount ??= claim.totalAmount;
+    claim.paidAmount ??= 0;
+    claim.balanceAmount = Math.max(0, (claim.approvedAmount ?? claim.totalAmount) - (claim.paidAmount ?? 0));
+    claim.outstandingAmount = claim.balanceAmount;
+    claim.note = claim.managerVerificationNote;
+    logAudit(database, user, "ReimbursementClaim", claim.id, "MANAGER_VERIFIED", claim.managerVerificationNote);
+    return claim;
+  });
+}
+
+export async function createReimbursementCashVoucher(
+  user: User,
+  claimId: string,
+  input: {
+    cashVoucherNumber: string;
+    amount: number;
+    remarks: string;
+  },
+) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const claim = database.reimbursementClaims.find((entry) => entry.id === claimId);
+
+    if (!claim) {
+      throw new Error("Reimbursement claim not found.");
+    }
+
+    const status = normalizeReimbursementStatus(claim.status);
+    if (status !== "ACCOUNTS_PAYMENT_PENDING" && status !== "PAYMENT_HOLD" && status !== "PARTIAL_PAYMENT" && status !== "BALANCE_OUTSTANDING") {
+      throw new Error("Manager verification is required before Accounts can create a cash voucher.");
+    }
+
+    const cashVoucherNumber = input.cashVoucherNumber.trim();
+    if (!cashVoucherNumber) {
+      throw new Error("Cash voucher number is required before OTP.");
+    }
+
+    const amount = Number(input.amount);
+    const outstanding = getReimbursementOutstanding(claim);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > outstanding) {
+      throw new Error(`Voucher amount must be greater than zero and not exceed outstanding amount Rs.${outstanding}.`);
+    }
+
+    if (!input.remarks.trim()) {
+      throw new Error("Accountant remarks are required for cash voucher creation.");
+    }
+
+    const now = nowIso();
+    claim.status = "CASH_VOUCHER_CREATED";
+    claim.cashVoucherNumber = cashVoucherNumber;
+    claim.cashVoucherCreatedAt = now;
+    claim.cashVoucherCreatedBy = user.id;
+    claim.cashVoucherAmount = amount;
+    claim.accountantRemarks = input.remarks.trim();
+    claim.note = input.remarks.trim();
+    logAudit(database, user, "ReimbursementClaim", claim.id, "CASH_VOUCHER_CREATED", `Cash voucher ${cashVoucherNumber} created for Rs.${amount}. ${input.remarks.trim()}`);
     return claim;
   });
 }
@@ -577,8 +686,13 @@ export async function sendReimbursementClaimOtp(user: User, claimId: string) {
       throw new Error("Reimbursement claim not found.");
     }
 
-    if (claim.status !== "REQUESTED" && claim.status !== "OTP_SENT") {
-      throw new Error("OTP can only be sent for pending reimbursement claims.");
+    const status = normalizeReimbursementStatus(claim.status);
+    if (status !== "CASH_VOUCHER_CREATED" && status !== "OTP_SENT") {
+      throw new Error("Create a cash voucher before sending reimbursement OTP.");
+    }
+
+    if (!claim.cashVoucherNumber) {
+      throw new Error("Cash voucher number is required before OTP.");
     }
 
     const now = nowIso();
@@ -615,12 +729,113 @@ export async function verifyReimbursementClaimOtp(user: User, claimId: string, o
     }
 
     const now = nowIso();
-    claim.status = "PAID";
+    claim.status = "AGENT_RECEIPT_CONFIRMED";
     claim.otpVerifiedAt = now;
+    claim.agentReceiptConfirmedAt = now;
+    claim.note = "Agent receipt confirmed by OTP.";
+    logAudit(database, user, "ReimbursementClaim", claim.id, "AGENT_RECEIPT_CONFIRMED", `Agent receipt confirmed by OTP for voucher ${claim.cashVoucherNumber ?? claim.id}.`);
+    return claim;
+  });
+}
+
+export async function recordReimbursementClaimPayment(
+  user: User,
+  claimId: string,
+  input: {
+    action: "FULL" | "PARTIAL" | "HOLD" | "REJECT";
+    amount?: number;
+    paymentMode?: ReimbursementPaymentMode;
+    referenceNumber?: string;
+    remarks: string;
+  },
+) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const claim = database.reimbursementClaims.find((entry) => entry.id === claimId);
+
+    if (!claim) {
+      throw new Error("Reimbursement claim not found.");
+    }
+
+    const remarks = input.remarks.trim();
+    if (!remarks) {
+      throw new Error("Accountant remarks are required.");
+    }
+
+    const status = normalizeReimbursementStatus(claim.status);
+    const now = nowIso();
+
+    if (input.action === "HOLD") {
+      if (status === "PAID" || status === "PAYMENT_REJECTED") {
+        throw new Error("Closed reimbursement claims cannot be put on hold.");
+      }
+      claim.status = "PAYMENT_HOLD";
+      claim.accountantRemarks = remarks;
+      claim.note = remarks;
+      logAudit(database, user, "ReimbursementClaim", claim.id, "PAYMENT_HOLD", remarks);
+      return claim;
+    }
+
+    if (input.action === "REJECT") {
+      if (status === "PAID") {
+        throw new Error("Paid reimbursement claims cannot be rejected.");
+      }
+      claim.status = "PAYMENT_REJECTED";
+      claim.rejectedAt = now;
+      claim.rejectedBy = user.id;
+      claim.accountantRemarks = remarks;
+      claim.note = remarks;
+      logAudit(database, user, "ReimbursementClaim", claim.id, "PAYMENT_REJECTED", remarks);
+      return claim;
+    }
+
+    if (status !== "AGENT_RECEIPT_CONFIRMED") {
+      throw new Error("Verify the agent receipt OTP before recording full or partial payment.");
+    }
+
+    const outstandingBefore = getReimbursementOutstanding(claim);
+    const requestedAmount = input.action === "FULL" ? outstandingBefore : Number(input.amount);
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0 || requestedAmount > outstandingBefore) {
+      throw new Error(`Payment amount must be greater than zero and not exceed outstanding amount Rs.${outstandingBefore}.`);
+    }
+
+    const paymentMode = input.paymentMode ?? "CASH";
+    const paidAmount = (claim.paidAmount ?? 0) + requestedAmount;
+    const outstandingAmount = Math.max(0, (claim.approvedAmount ?? claim.totalAmount) - paidAmount);
+    claim.paidAmount = paidAmount;
+    claim.balanceAmount = outstandingAmount;
+    claim.outstandingAmount = outstandingAmount;
+    claim.paymentMode = paymentMode;
+    claim.accountantRemarks = remarks;
+    claim.paymentHistory ??= [];
+    claim.paymentHistory.push({
+      id: randomUUID(),
+      amount: requestedAmount,
+      balanceAmount: outstandingAmount,
+      outstandingAmount,
+      paymentMode,
+      cashVoucherNumber: claim.cashVoucherNumber ?? null,
+      referenceNumber: input.referenceNumber?.trim() || null,
+      remarks,
+      paidBy: user.id,
+      paidAt: now,
+    });
+
+    if (outstandingAmount > 0) {
+      claim.status = "PARTIAL_PAYMENT";
+      claim.paidAt = null;
+      claim.paidBy = null;
+      claim.note = `Partial payment recorded. Balance outstanding Rs.${outstandingAmount}. ${remarks}`;
+      logAudit(database, user, "ReimbursementClaim", claim.id, "PARTIAL_PAYMENT", claim.note);
+      return claim;
+    }
+
+    claim.status = "PAID";
     claim.paidAt = now;
     claim.paidBy = user.id;
-    claim.note = "Payment verified by OTP.";
-    logAudit(database, user, "ReimbursementClaim", claim.id, "OTP_VERIFIED", `Paid reimbursement claim for ${claim.totalAmount}.`);
+    claim.note = remarks;
+    logAudit(database, user, "ReimbursementClaim", claim.id, "PAID", `Paid reimbursement claim for Rs.${paidAmount}. ${remarks}`);
     return claim;
   });
 }
@@ -675,7 +890,7 @@ export async function endWorkdaySession(user: User, latLng: LatLng | null) {
 
 function getClaimBlockingReadingDate(database: Database, agentId: string, dateKey: string) {
   return database.reimbursementClaims.find((claim) => {
-    if (claim.agentId !== agentId || claim.status === "REJECTED") {
+    if (claim.agentId !== agentId || normalizeReimbursementStatus(claim.status) === "PAYMENT_REJECTED") {
       return false;
     }
 
@@ -2166,13 +2381,8 @@ export async function createSalesOrderRequest(
       throw new Error("Confirm full payment receipt for advance-payment orders.");
     }
 
-    if (requiresPoUpload(paymentTerms) && !input.poDocumentUrl) {
-      throw new Error("Upload the PO document for this payment term.");
-    }
-
-    if (requiresPdcUpload(paymentTerms) && !input.pdcDocumentUrl) {
-      throw new Error("Upload the PDC document for this payment term.");
-    }
+    const poMissing = requiresPoUpload(paymentTerms) && !input.poDocumentUrl;
+    const pdcMissing = requiresPdcUpload(paymentTerms) && !input.pdcDocumentUrl;
 
     if (gstin && !isValidGstin(gstin)) {
       throw new Error("Enter a valid GSTIN or leave it blank for challan-only dispatch.");
@@ -2238,6 +2448,30 @@ export async function createSalesOrderRequest(
       pumpOperatorPhone: null,
       pumpDispatchNote: null,
       paymentReceivedConfirmed: input.paymentReceivedConfirmed,
+      financeChecklist: null,
+      manualPaymentVerification: null,
+      ledgerDecisionStatus: gstin ? "GST_CLIENT_ODOO_LEDGER" : "NON_GST_INTERNAL_LEDGER",
+      linkedLedgerCustomerName: null,
+      duplicateLedgerConfidence: null,
+      poPdcExceptionStatus: poMissing || pdcMissing ? "REQUIRED" : "NOT_REQUIRED",
+      poPdcExceptionReason: null,
+      poPdcExceptionRequestedBy: null,
+      poPdcExceptionRequestedAt: null,
+      poPdcExceptionDecidedBy: null,
+      poPdcExceptionDecidedAt: null,
+      creditRiskCategory: "LOW",
+      creditLimitAmount: null,
+      creditPeriodDays: null,
+      creditOverrideApprovedBy: null,
+      creditOverrideApprovedAt: null,
+      creditOverrideExpiresAt: null,
+      creditOverrideAmountLimit: null,
+      creditOverrideReason: null,
+      salesOrderFinalChecklist: null,
+      salesOrderPreviewConfirmedBy: null,
+      salesOrderPreviewConfirmedAt: null,
+      salesOrderPreviewHash: null,
+      salesOrderCopyUrl: null,
       requiredDate: requiredDate.toISOString(),
       pumpRequired: input.pumpRequired,
       priority: input.priority,
@@ -2270,11 +2504,180 @@ export async function createSalesOrderRequest(
   });
 }
 
+type FinanceReviewInput = {
+  financeChecklist?: Partial<{
+    gstChecked: boolean;
+    gstCertificateChecked: boolean;
+    legalNameChecked: boolean;
+    billingAddressChecked: boolean;
+    poChecked: boolean;
+    pdcChecked: boolean;
+    paymentProofChecked: boolean;
+    amountReceivedChecked: boolean;
+    outstandingChecked: boolean;
+    overdueChecked: boolean;
+    creditLimitChecked: boolean;
+    accountantRemarks: string;
+  }>;
+  manualPaymentVerification?: Partial<{
+    amountReceived: number;
+    paymentMode: PaymentVerificationMode;
+    utrNumber: string | null;
+    chequeNumber: string | null;
+    cashVoucherNumber: string | null;
+    paymentDate: string;
+    paymentProofUrl: string | null;
+    bankCashAccount: string;
+  }>;
+  ledgerDecisionStatus?: LedgerDecisionStatus | null;
+  linkedLedgerCustomerName?: string | null;
+  duplicateLedgerConfidence?: number | null;
+  creditLimitAmount?: number | null;
+  creditPeriodDays?: number | null;
+  creditRiskCategory?: CreditRiskCategory;
+};
+
+const LEDGER_DECISION_STATUSES: LedgerDecisionStatus[] = [
+  "GST_CLIENT_ODOO_LEDGER",
+  "NON_GST_INTERNAL_LEDGER",
+  "GST_MATCH_FOUND",
+  "GST_NO_MATCH",
+  "LINK_EXISTING_LEDGER",
+  "CREATE_NEW_SITE",
+  "CREATE_NEW_LEDGER",
+];
+
+const PAYMENT_VERIFICATION_MODES: PaymentVerificationMode[] = ["CASH", "CHEQUE", "NEFT", "UPI", "BANK_TRANSFER"];
+
+function applyFinanceReviewInput(user: User, request: SalesOrderRequest, input?: FinanceReviewInput) {
+  if (!input) {
+    return;
+  }
+
+  const now = nowIso();
+
+  if (input.financeChecklist) {
+    const checklist = input.financeChecklist;
+    request.financeChecklist = {
+      gstChecked: Boolean(checklist.gstChecked),
+      gstCertificateChecked: Boolean(checklist.gstCertificateChecked),
+      legalNameChecked: Boolean(checklist.legalNameChecked),
+      billingAddressChecked: Boolean(checklist.billingAddressChecked),
+      poChecked: Boolean(checklist.poChecked),
+      pdcChecked: Boolean(checklist.pdcChecked),
+      paymentProofChecked: Boolean(checklist.paymentProofChecked),
+      amountReceivedChecked: Boolean(checklist.amountReceivedChecked),
+      outstandingChecked: Boolean(checklist.outstandingChecked),
+      overdueChecked: Boolean(checklist.overdueChecked),
+      creditLimitChecked: Boolean(checklist.creditLimitChecked),
+      accountantRemarks: `${checklist.accountantRemarks ?? ""}`.trim(),
+      verifiedBy: user.id,
+      verifiedAt: now,
+    };
+  }
+
+  if (input.manualPaymentVerification) {
+    const verification = input.manualPaymentVerification;
+    const amountReceived = Number(verification.amountReceived ?? 0);
+    const paymentMode = PAYMENT_VERIFICATION_MODES.includes(verification.paymentMode as PaymentVerificationMode)
+      ? (verification.paymentMode as PaymentVerificationMode)
+      : "CASH";
+    const paymentDate = verification.paymentDate ? new Date(`${verification.paymentDate}`).toISOString() : now;
+    request.manualPaymentVerification = {
+      amountReceived,
+      paymentMode,
+      utrNumber: verification.utrNumber?.trim() || null,
+      chequeNumber: verification.chequeNumber?.trim() || null,
+      cashVoucherNumber: verification.cashVoucherNumber?.trim() || null,
+      paymentDate,
+      paymentProofUrl: verification.paymentProofUrl?.trim() || null,
+      bankCashAccount: `${verification.bankCashAccount ?? ""}`.trim(),
+      verifiedBy: user.id,
+      verifiedAt: now,
+      differenceFromRequiredAmount: Math.round((amountReceived - request.amount) * 100) / 100,
+    };
+  }
+
+  if (input.ledgerDecisionStatus && LEDGER_DECISION_STATUSES.includes(input.ledgerDecisionStatus)) {
+    request.ledgerDecisionStatus = input.ledgerDecisionStatus;
+  }
+
+  request.linkedLedgerCustomerName = input.linkedLedgerCustomerName?.trim() || (request.linkedLedgerCustomerName ?? null);
+  request.duplicateLedgerConfidence =
+    typeof input.duplicateLedgerConfidence === "number" && Number.isFinite(input.duplicateLedgerConfidence)
+      ? Math.max(0, Math.min(input.duplicateLedgerConfidence, 1))
+      : request.duplicateLedgerConfidence ?? null;
+
+  const creditLimitAmount = Number(input.creditLimitAmount);
+  if (Number.isFinite(creditLimitAmount) && creditLimitAmount >= 0) {
+    request.creditLimitAmount = creditLimitAmount;
+  }
+
+  const creditPeriodDays = Number(input.creditPeriodDays);
+  if (Number.isFinite(creditPeriodDays) && creditPeriodDays >= 0) {
+    request.creditPeriodDays = creditPeriodDays;
+  }
+
+  if (input.creditRiskCategory === "LOW" || input.creditRiskCategory === "MEDIUM" || input.creditRiskCategory === "HIGH" || input.creditRiskCategory === "BLOCKED") {
+    request.creditRiskCategory = input.creditRiskCategory;
+  }
+}
+
+function getActiveOrderExposure(database: Database, request: SalesOrderRequest) {
+  return database.salesOrderRequests
+    .filter((entry) => entry.id !== request.id && entry.customerName.trim().toLowerCase() === request.customerName.trim().toLowerCase())
+    .filter((entry) => entry.status !== "FINANCE_REJECTED" && entry.status !== "SCHEDULE_REJECTED")
+    .reduce((sum, entry) => sum + entry.amount, request.amount);
+}
+
+function assertFinanceApprovalSafeguards(database: Database, request: SalesOrderRequest) {
+  if (!isFinanceChecklistComplete(request.financeChecklist)) {
+    throw new Error("Complete and save the finance verification checklist before ledger approval.");
+  }
+
+  const paymentTerms = normalizePaymentTerms(request.paymentType, request.paymentTerms);
+  if (requiresPaymentReceipt(request.paymentType, paymentTerms) && !isManualPaymentVerificationComplete(request.manualPaymentVerification)) {
+    throw new Error("Complete manual payment verification before approving an advance-payment ledger.");
+  }
+
+  if (request.gstin && request.ledgerDecisionStatus === "NON_GST_INTERNAL_LEDGER") {
+    throw new Error("GST customers must use the GST/Odoo ledger path.");
+  }
+
+  if (!request.gstin && request.ledgerDecisionStatus === "GST_CLIENT_ODOO_LEDGER") {
+    throw new Error("Non-GST customers must use the internal app ledger path.");
+  }
+
+  if ((requiresPoUpload(paymentTerms) && !request.poDocumentUrl) || (requiresPdcUpload(paymentTerms) && !request.pdcDocumentUrl)) {
+    if (request.poPdcExceptionStatus !== "APPROVED") {
+      throw new Error("Missing PO/PDC requires manager exception approval before ledger approval.");
+    }
+  }
+
+  if (request.paymentType === "CREDIT") {
+    const account = findCustomerAccountByName(database.customerAccounts ?? [], request.customerName);
+    const creditLimit = request.creditLimitAmount ?? account?.creditLimit ?? request.amount;
+    const currentOutstanding = Math.max(0, getCustomerLedgerBalance(database.customerLedgerEntries ?? [], request.customerName));
+    const activeOrderExposure = getActiveOrderExposure(database, request);
+    const availableCredit = calculateAvailableCredit({ creditLimit, currentOutstanding, activeOrderExposure });
+    const riskCategory = request.creditRiskCategory ?? account?.riskLevel ?? "LOW";
+
+    if (riskCategory === "BLOCKED" && !request.creditOverrideApprovedBy) {
+      throw new Error("Customer risk is blocked. Manager credit override is required.");
+    }
+
+    if (availableCredit < 0 && !request.creditOverrideApprovedBy) {
+      throw new Error(`Available credit is negative (Rs.${availableCredit}). Manager credit override is required.`);
+    }
+  }
+}
+
 export async function reviewSalesOrderRequestByAccounting(
   user: User,
   requestId: string,
   status: "FINANCE_VERIFIED" | "FINANCE_REJECTED",
   note: string,
+  input?: FinanceReviewInput,
 ) {
   assertRole(user, ["ACCOUNTING"]);
 
@@ -2289,10 +2692,15 @@ export async function reviewSalesOrderRequestByAccounting(
       throw new Error("This sales order request is not waiting for finance review.");
     }
 
+    applyFinanceReviewInput(user, request, input);
+    if (status === "FINANCE_VERIFIED") {
+      assertFinanceApprovalSafeguards(database, request);
+    }
+
     request.status = status;
     request.financeReviewedBy = user.id;
     request.financeReviewedAt = nowIso();
-    request.financeNote = note;
+    request.financeNote = note || request.financeChecklist?.accountantRemarks || "";
     if (status === "FINANCE_VERIFIED" && (request.gstin || request.gstCertificateUrl)) {
       request.gstVerificationStatus = "VERIFIED";
       request.gstVerifiedBy = user.id;
@@ -2315,6 +2723,11 @@ export async function reviewSalesOrderRequestByAccounting(
       database.customerLedgerEntries ??= [];
       const existingAccount = findCustomerAccountByName(database.customerAccounts, request.customerName);
       const account = existingAccount ?? createCustomerAccountFromSalesOrder(randomUUID(), request);
+      account.creditLimit = request.creditLimitAmount ?? account.creditLimit;
+      account.creditPeriodDays = request.creditPeriodDays ?? account.creditPeriodDays;
+      account.riskLevel = request.creditRiskCategory ?? account.riskLevel;
+      account.activeOrderExposure = getActiveOrderExposure(database, request);
+      account.outstandingAmount = Math.max(0, getCustomerLedgerBalance(database.customerLedgerEntries, request.customerName));
       if (!existingAccount) {
         database.customerAccounts.push(account);
         logAudit(
@@ -2325,6 +2738,8 @@ export async function reviewSalesOrderRequestByAccounting(
           "CREATE",
           `Created customer ledger account for ${account.customerName}.`,
         );
+      } else {
+        account.creditApprovalHistory ??= [];
       }
 
       const advanceReferenceId = getAdvanceReceiptReferenceId(request.id);
@@ -2362,6 +2777,192 @@ export async function reviewSalesOrderRequestByAccounting(
   return syncOdooLedgerAfterFinanceReview(user, orderRequest);
 }
 
+export async function saveSalesOrderFinalChecklistByAccounting(
+  user: User,
+  requestId: string,
+  input: Partial<{
+    gradeConfirmed: boolean;
+    quantityConfirmed: boolean;
+    rateConfirmed: boolean;
+    paymentTermsConfirmed: boolean;
+    requiredDateTimeConfirmed: boolean;
+    castingTypeConfirmed: boolean;
+    pumpDumpRequirementConfirmed: boolean;
+    receiverConfirmed: boolean;
+    phoneConfirmed: boolean;
+    deliveryAddressConfirmed: boolean;
+    plantConfirmed: boolean;
+    taxChallanModeConfirmed: boolean;
+    accountantRemarks: string;
+  }>,
+) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    if (request.status !== "FINANCE_VERIFIED") {
+      throw new Error("Final sales order checklist can be saved only after ledger creation.");
+    }
+
+    const remarks = `${input.accountantRemarks ?? ""}`.trim();
+    if (!remarks) {
+      throw new Error("Accountant remarks are required for the final sales order checklist.");
+    }
+
+    request.salesOrderFinalChecklist = {
+      gradeConfirmed: Boolean(input.gradeConfirmed),
+      quantityConfirmed: Boolean(input.quantityConfirmed),
+      rateConfirmed: Boolean(input.rateConfirmed),
+      paymentTermsConfirmed: Boolean(input.paymentTermsConfirmed),
+      requiredDateTimeConfirmed: Boolean(input.requiredDateTimeConfirmed),
+      castingTypeConfirmed: Boolean(input.castingTypeConfirmed),
+      pumpDumpRequirementConfirmed: Boolean(input.pumpDumpRequirementConfirmed),
+      receiverConfirmed: Boolean(input.receiverConfirmed),
+      phoneConfirmed: Boolean(input.phoneConfirmed),
+      deliveryAddressConfirmed: Boolean(input.deliveryAddressConfirmed),
+      plantConfirmed: Boolean(input.plantConfirmed),
+      taxChallanModeConfirmed: Boolean(input.taxChallanModeConfirmed),
+      accountantRemarks: remarks,
+      verifiedBy: user.id,
+      verifiedAt: nowIso(),
+    };
+    request.salesOrderPreviewConfirmedBy = null;
+    request.salesOrderPreviewConfirmedAt = null;
+    request.salesOrderPreviewHash = null;
+
+    logAudit(database, user, "SalesOrderRequest", request.id, "FINAL_CHECKLIST_SAVED", remarks);
+    return request;
+  });
+}
+
+export async function requestPoPdcExceptionByAccounting(user: User, requestId: string, reason: string) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    const normalizedReason = reason.trim();
+    if (!normalizedReason) {
+      throw new Error("Exception reason is required.");
+    }
+
+    request.poPdcExceptionStatus = "REQUESTED";
+    request.poPdcExceptionReason = normalizedReason;
+    request.poPdcExceptionRequestedBy = user.id;
+    request.poPdcExceptionRequestedAt = nowIso();
+    request.poPdcExceptionDecidedBy = null;
+    request.poPdcExceptionDecidedAt = null;
+    logAudit(database, user, "SalesOrderRequest", request.id, "PO_PDC_EXCEPTION_REQUESTED", normalizedReason);
+    return request;
+  });
+}
+
+export async function decidePoPdcExceptionByManager(user: User, requestId: string, approved: boolean, note: string) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    if (request.poPdcExceptionStatus !== "REQUESTED") {
+      throw new Error("This request is not waiting for a PO/PDC exception decision.");
+    }
+
+    const normalizedNote = note.trim();
+    if (!normalizedNote) {
+      throw new Error("Manager note is required for exception decision.");
+    }
+
+    request.poPdcExceptionStatus = approved ? "APPROVED" : "REJECTED";
+    request.poPdcExceptionDecidedBy = user.id;
+    request.poPdcExceptionDecidedAt = nowIso();
+    request.poPdcExceptionReason = `${request.poPdcExceptionReason ?? ""} | Manager: ${normalizedNote}`;
+    logAudit(database, user, "SalesOrderRequest", request.id, approved ? "PO_PDC_EXCEPTION_APPROVED" : "PO_PDC_EXCEPTION_REJECTED", normalizedNote);
+    return request;
+  });
+}
+
+export async function approveCreditOverrideByManager(
+  user: User,
+  requestId: string,
+  input: {
+    amountLimit: number;
+    expiresAt: string;
+    reason: string;
+  },
+) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    const amountLimit = Number(input.amountLimit);
+    if (!Number.isFinite(amountLimit) || amountLimit <= 0) {
+      throw new Error("Credit override amount limit must be greater than zero.");
+    }
+
+    const expiresAt = new Date(input.expiresAt);
+    if (Number.isNaN(expiresAt.getTime())) {
+      throw new Error("Credit override expiry date is invalid.");
+    }
+
+    const reason = input.reason.trim();
+    if (!reason) {
+      throw new Error("Credit override reason is required.");
+    }
+
+    request.creditOverrideApprovedBy = user.id;
+    request.creditOverrideApprovedAt = nowIso();
+    request.creditOverrideExpiresAt = expiresAt.toISOString();
+    request.creditOverrideAmountLimit = amountLimit;
+    request.creditOverrideReason = reason;
+    logAudit(database, user, "SalesOrderRequest", request.id, "CREDIT_OVERRIDE_APPROVED", reason);
+    return request;
+  });
+}
+
+export async function confirmSalesOrderPreviewByAccounting(user: User, requestId: string) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const request = database.salesOrderRequests.find((entry) => entry.id === requestId);
+
+    if (!request) {
+      throw new Error("Sales order request not found.");
+    }
+
+    if (request.status !== "FINANCE_VERIFIED") {
+      throw new Error("Preview can be confirmed only after ledger creation.");
+    }
+
+    if (!isSalesOrderFinalChecklistComplete(request.salesOrderFinalChecklist)) {
+      throw new Error("Complete the final sales order checklist before preview confirmation.");
+    }
+
+    request.salesOrderPreviewConfirmedBy = user.id;
+    request.salesOrderPreviewConfirmedAt = nowIso();
+    request.salesOrderPreviewHash = buildSalesOrderPreviewHash(request);
+    logAudit(database, user, "SalesOrderRequest", request.id, "SALES_ORDER_PREVIEW_CONFIRMED", "Accounts confirmed the final sales order preview.");
+    return request;
+  });
+}
+
 export async function createSalesOrderFromLedgerByAccounting(user: User, requestId: string, note: string) {
   assertRole(user, ["ACCOUNTING"]);
 
@@ -2374,6 +2975,14 @@ export async function createSalesOrderFromLedgerByAccounting(user: User, request
 
     if (request.status !== "FINANCE_VERIFIED") {
       throw new Error("Create the customer ledger before creating the sales order.");
+    }
+
+    if (!isSalesOrderFinalChecklistComplete(request.salesOrderFinalChecklist)) {
+      throw new Error("Complete the final sales order checklist before creating the sales order.");
+    }
+
+    if (!request.salesOrderPreviewConfirmedAt || request.salesOrderPreviewHash !== buildSalesOrderPreviewHash(request)) {
+      throw new Error("Confirm the sales order preview before final creation. If details changed, confirm preview again.");
     }
 
     const scheduleDateTime = new Date(request.requiredDate);
@@ -2397,6 +3006,7 @@ export async function createSalesOrderFromLedgerByAccounting(user: User, request
       note.trim() ||
       "Accounts created the sales order from the verified customer ledger and sent it to production.";
     request.status = "SCHEDULE_PENDING";
+    request.salesOrderCopyUrl = `/api/sales-order-requests/${request.id}/download`;
     request.odooSalesOrderSyncStatus = shouldSyncSalesOrderToOdoo(request) ? "PENDING" : "NOT_REQUIRED";
     request.odooSalesOrderSyncError = null;
     request.odooSalesOrderSyncedAt = null;
@@ -2830,7 +3440,7 @@ async function getAgentScopedDashboardDatabase(user: User, options: AgentDashboa
   const recentSessions = workdaySessions.filter((entry) => entry.date >= recentCutoff);
   const claimedSessionIds = new Set(
     reimbursementClaims
-      .filter((claim) => claim.status !== "REJECTED")
+      .filter((claim) => normalizeReimbursementStatus(claim.status) !== "PAYMENT_REJECTED")
       .flatMap((claim) => claim.lineItems.map((lineItem) => lineItem.sessionId)),
   );
   const visibleSessions =
@@ -3073,6 +3683,7 @@ export async function getManagerDashboardData(user: User): Promise<ManagerDashbo
     approvals: database.approvalRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     informalQuotationRequests: database.informalQuotationRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     salesOrderRequests: database.salesOrderRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
+    reimbursementClaims: database.reimbursementClaims.sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
     helpRequests: database.helpRequests,
     tasks: database.tasks,
     targets: database.targets,

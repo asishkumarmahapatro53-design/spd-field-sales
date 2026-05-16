@@ -32,8 +32,11 @@ export function createCustomerAccountFromSalesOrder(id: string, request: SalesOr
     creditLimit: request.paymentType === "CREDIT" ? Math.max(0, request.amount) : 0,
     creditPeriodDays: request.paymentType === "CREDIT" ? 30 : 0,
     outstandingAmount: 0,
+    activeOrderExposure: request.status === "SCHEDULE_APPROVED" || request.status === "SCHEDULE_PENDING" ? request.amount : 0,
+    overdueAmount: 0,
     riskLevel: "LOW",
     lastPaymentAt: null,
+    creditApprovalHistory: [],
   };
 }
 

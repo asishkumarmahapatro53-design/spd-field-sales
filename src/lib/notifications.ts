@@ -180,7 +180,7 @@ async function getAccountingNotifications(user: User) {
       id: "accounts-ledger",
       label: "Pending reimbursements",
       detail: "Claims need OTP or payment confirmation.",
-      count: claims.filter((entry) => entry.status === "REQUESTED" || entry.status === "OTP_SENT").length,
+      count: claims.filter((entry) => entry.status !== "PAID" && entry.status !== "PAYMENT_REJECTED" && entry.status !== "REJECTED").length,
       href: "/accounting",
       tone: "warning",
     }),

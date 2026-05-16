@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { getApprovalItems } from "@/lib/commercial";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { ApprovalRequest, HelpRequest, Lead, OdometerReading, Target, User } from "@/lib/types";
+import type { ApprovalRequest, HelpRequest, Lead, OdometerReading, ReimbursementClaim, SalesOrderRequest, Target, User } from "@/lib/types";
 
 async function parseApiError(response: Response) {
   const payload = await response.json().catch(() => ({ error: "Request failed." }));
@@ -108,6 +108,211 @@ export function VerificationCard({ verificationQueue }: { verificationQueue: Odo
           ))
         ) : (
           <div className="success-box">No manual verification items are pending.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function ReimbursementVerificationCard({ claims, agents }: { claims: ReimbursementClaim[]; agents: User[] }) {
+  const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
+  const pendingClaims = claims.filter((claim) => claim.status === "CLAIM_REQUESTED" || claim.status === "REQUESTED");
+
+  async function verify(id: string) {
+    setBusyId(id);
+    setError("");
+    const response = await fetch(`/api/reimbursement-claims/${id}/manager-verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: "Manager verified claim for Accounts payment." }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    window.location.reload();
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>Reimbursement Verification</h2>
+          <p className="panel-copy">Manager verification must happen before Accounts can create cash voucher and OTP.</p>
+        </div>
+        <span className="status-badge status-pending">{pendingClaims.length} pending</span>
+      </div>
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="data-list">
+        {pendingClaims.length ? (
+          pendingClaims.map((claim) => {
+            const agent = agents.find((entry) => entry.id === claim.agentId);
+            return (
+              <div key={claim.id} className="data-row">
+                <div className="panel-header">
+                  <h4>{agent?.name ?? "Sales agent"}</h4>
+                  <span className="status-badge status-pending">Claim requested</span>
+                </div>
+                <p>
+                  {claim.periodStart} to {claim.periodEnd} | Rs {Math.round(claim.totalAmount).toLocaleString("en-IN")}
+                </p>
+                <button className="button" type="button" disabled={busyId === claim.id} onClick={() => void verify(claim.id)}>
+                  {busyId === claim.id ? "Verifying..." : "Verify for Accounts"}
+                </button>
+              </div>
+            );
+          })
+        ) : (
+          <div className="success-box">No reimbursement claims are waiting for manager verification.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function PoPdcExceptionDecisionCard({ requests }: { requests: SalesOrderRequest[] }) {
+  const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
+  const pending = requests.filter((request) => request.poPdcExceptionStatus === "REQUESTED");
+
+  async function decide(id: string, action: "APPROVE" | "REJECT") {
+    setBusyId(id);
+    setError("");
+    const response = await fetch(`/api/sales-order-requests/${id}/po-pdc-exception`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        note: action === "APPROVE" ? "Manager approved missing PO/PDC exception." : "Manager rejected missing PO/PDC exception.",
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    window.location.reload();
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>PO/PDC Exceptions</h2>
+          <p className="panel-copy">Accounts cannot approve ledgers with missing PO/PDC until manager exception is approved.</p>
+        </div>
+        <span className="status-badge status-pending">{pending.length} pending</span>
+      </div>
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="data-list">
+        {pending.length ? (
+          pending.map((request) => (
+            <div key={request.id} className="data-row">
+              <div className="panel-header">
+                <h4>{request.customerName}</h4>
+                <span className="status-badge status-pending">Exception requested</span>
+              </div>
+              <p>{request.poPdcExceptionReason ?? "No reason captured."}</p>
+              <div className="row-meta">
+                <span>{request.poDocumentUrl ? "PO uploaded" : "PO missing"}</span>
+                <span>{request.pdcDocumentUrl ? "PDC uploaded" : "PDC missing"}</span>
+                <span>{request.paymentTerms}</span>
+              </div>
+              <div className="button-row">
+                <button className="button" type="button" disabled={busyId === request.id} onClick={() => void decide(request.id, "APPROVE")}>
+                  Approve exception
+                </button>
+                <button className="button-danger" type="button" disabled={busyId === request.id} onClick={() => void decide(request.id, "REJECT")}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="success-box">No PO/PDC exceptions are waiting.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function CreditOverrideDecisionCard({ requests }: { requests: SalesOrderRequest[] }) {
+  const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
+  const creditRequests = requests.filter((request) => request.status === "PENDING_FINANCE" && request.paymentType === "CREDIT");
+
+  async function approve(event: React.FormEvent<HTMLFormElement>, id: string) {
+    event.preventDefault();
+    setBusyId(id);
+    setError("");
+    const formData = new FormData(event.currentTarget);
+    const response = await fetch(`/api/sales-order-requests/${id}/credit-override`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amountLimit: Number(formData.get("amountLimit")),
+        expiresAt: formData.get("expiresAt"),
+        reason: formData.get("reason"),
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    window.location.reload();
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>Credit Exceptions</h2>
+          <p className="panel-copy">Approve temporary credit exceptions before Accounts can bypass over-limit or blocked-risk checks.</p>
+        </div>
+        <span className="status-badge status-pending">{creditRequests.length} credit requests</span>
+      </div>
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="data-list">
+        {creditRequests.length ? (
+          creditRequests.map((request) => (
+            <form key={request.id} className="data-row" onSubmit={(event) => void approve(event, request.id)}>
+              <div className="panel-header">
+                <h4>{request.customerName}</h4>
+                <span className="status-badge status-pending">{request.creditOverrideApprovedBy ? "Override approved" : "Credit review"}</span>
+              </div>
+              <p>
+                Order value Rs {Math.round(request.amount).toLocaleString("en-IN")} | Terms {request.paymentTerms} | Risk {request.creditRiskCategory ?? "LOW"}
+              </p>
+              <div className="three-grid">
+                <div className="field">
+                  <label htmlFor={`amountLimit-${request.id}`}>Temporary amount limit</label>
+                  <input id={`amountLimit-${request.id}`} name="amountLimit" type="number" min="1" defaultValue={request.amount} required />
+                </div>
+                <div className="field">
+                  <label htmlFor={`expiresAt-${request.id}`}>Expiry</label>
+                  <input id={`expiresAt-${request.id}`} name="expiresAt" type="date" required />
+                </div>
+                <div className="field">
+                  <label htmlFor={`reason-${request.id}`}>Reason</label>
+                  <input id={`reason-${request.id}`} name="reason" required defaultValue="Temporary credit exception approved by manager." />
+                </div>
+              </div>
+              <button className="button-secondary" type="submit" disabled={busyId === request.id}>
+                {busyId === request.id ? "Saving..." : "Approve credit exception"}
+              </button>
+            </form>
+          ))
+        ) : (
+          <div className="success-box">No credit requests are waiting for exception review.</div>
         )}
       </div>
     </section>

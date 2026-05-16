@@ -20,7 +20,7 @@ export type InformalQuotationWhatsappStatus = "NOT_SENT" | "PENDING_CONFIGURATIO
 export type TaskStatus = "OPEN" | "DONE";
 export type HelpRequestStatus = "OPEN" | "RESOLVED";
 export type FleetVehicleStatus = "ACTIVE" | "IDLE" | "SERVICE" | "OFF_ROUTE";
-export type CreditRisk = "LOW" | "MEDIUM" | "HIGH";
+export type CreditRisk = "LOW" | "MEDIUM" | "HIGH" | "BLOCKED";
 export type InvoiceStatus = "OPEN" | "PAID" | "OVERDUE" | "PARTIAL";
 export type PaymentType = "NORMAL" | "CREDIT";
 export type PaymentTerms = "ADVANCE" | "PO" | "PDC" | "PO_AND_PDC";
@@ -46,7 +46,33 @@ export type SalesOrderRequestStatus =
   | "SCHEDULE_PENDING"
   | "SCHEDULE_APPROVED"
   | "SCHEDULE_REJECTED";
-export type ReimbursementClaimStatus = "REQUESTED" | "OTP_SENT" | "PAID" | "REJECTED";
+export type ReimbursementClaimStatus =
+  | "CLAIM_REQUESTED"
+  | "MANAGER_VERIFIED"
+  | "ACCOUNTS_PAYMENT_PENDING"
+  | "CASH_VOUCHER_CREATED"
+  | "OTP_SENT"
+  | "AGENT_RECEIPT_CONFIRMED"
+  | "PAID"
+  | "PARTIAL_PAYMENT"
+  | "BALANCE_OUTSTANDING"
+  | "PAYMENT_HOLD"
+  | "PAYMENT_REJECTED"
+  // Legacy statuses kept so old local/Firebase data can normalize safely.
+  | "REQUESTED"
+  | "REJECTED";
+export type ReimbursementPaymentMode = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "BANK_TRANSFER";
+export type PaymentVerificationMode = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "BANK_TRANSFER";
+export type LedgerDecisionStatus =
+  | "GST_CLIENT_ODOO_LEDGER"
+  | "NON_GST_INTERNAL_LEDGER"
+  | "GST_MATCH_FOUND"
+  | "GST_NO_MATCH"
+  | "LINK_EXISTING_LEDGER"
+  | "CREATE_NEW_SITE"
+  | "CREATE_NEW_LEDGER";
+export type PoPdcExceptionStatus = "NOT_REQUIRED" | "REQUIRED" | "REQUESTED" | "APPROVED" | "REJECTED";
+export type CreditRiskCategory = CreditRisk;
 export type StakeholderRole =
   | "SITE_SUPERVISOR"
   | "SITE_ENGINEER"
@@ -358,8 +384,11 @@ export interface CustomerAccount {
   creditLimit: number;
   creditPeriodDays: number;
   outstandingAmount: number;
+  activeOrderExposure?: number;
+  overdueAmount?: number;
   riskLevel: CreditRisk;
   lastPaymentAt: string | null;
+  creditApprovalHistory?: CreditApprovalHistoryEntry[];
 }
 
 export interface CustomerInvoice {
@@ -457,6 +486,30 @@ export interface SalesOrderRequest {
   pumpOperatorPhone: string | null;
   pumpDispatchNote: string | null;
   paymentReceivedConfirmed: boolean;
+  financeChecklist?: FinanceVerificationChecklist | null;
+  manualPaymentVerification?: ManualPaymentVerification | null;
+  ledgerDecisionStatus?: LedgerDecisionStatus | null;
+  linkedLedgerCustomerName?: string | null;
+  duplicateLedgerConfidence?: number | null;
+  poPdcExceptionStatus?: PoPdcExceptionStatus;
+  poPdcExceptionReason?: string | null;
+  poPdcExceptionRequestedBy?: string | null;
+  poPdcExceptionRequestedAt?: string | null;
+  poPdcExceptionDecidedBy?: string | null;
+  poPdcExceptionDecidedAt?: string | null;
+  creditRiskCategory?: CreditRiskCategory;
+  creditLimitAmount?: number | null;
+  creditPeriodDays?: number | null;
+  creditOverrideApprovedBy?: string | null;
+  creditOverrideApprovedAt?: string | null;
+  creditOverrideExpiresAt?: string | null;
+  creditOverrideAmountLimit?: number | null;
+  creditOverrideReason?: string | null;
+  salesOrderFinalChecklist?: SalesOrderFinalChecklist | null;
+  salesOrderPreviewConfirmedBy?: string | null;
+  salesOrderPreviewConfirmedAt?: string | null;
+  salesOrderPreviewHash?: string | null;
+  salesOrderCopyUrl?: string | null;
   requiredDate: string;
   pumpRequired: boolean;
   priority: RequestPriority;
@@ -566,6 +619,19 @@ export interface ReimbursementClaimLine {
   totalAmount: number;
 }
 
+export interface ReimbursementPaymentHistoryEntry {
+  id: string;
+  amount: number;
+  balanceAmount: number;
+  outstandingAmount: number;
+  paymentMode: ReimbursementPaymentMode;
+  cashVoucherNumber: string | null;
+  referenceNumber: string | null;
+  remarks: string;
+  paidBy: string;
+  paidAt: string;
+}
+
 export interface ReimbursementClaim {
   id: string;
   agentId: string;
@@ -578,16 +644,92 @@ export interface ReimbursementClaim {
   fuelAmount: number;
   lunchAmount: number;
   totalAmount: number;
+  approvedAmount?: number;
+  paidAmount?: number;
+  balanceAmount?: number;
+  outstandingAmount?: number;
   requestedAt: string;
+  managerVerifiedBy?: string | null;
+  managerVerifiedAt?: string | null;
+  managerVerificationNote?: string | null;
+  accountsPaymentPendingAt?: string | null;
+  cashVoucherNumber?: string | null;
+  cashVoucherCreatedAt?: string | null;
+  cashVoucherCreatedBy?: string | null;
+  cashVoucherAmount?: number | null;
   otpCode: string | null;
   otpSentAt: string | null;
   otpExpiresAt: string | null;
   otpVerifiedAt: string | null;
+  agentReceiptConfirmedAt?: string | null;
   paidAt: string | null;
   paidBy: string | null;
   rejectedAt: string | null;
   rejectedBy: string | null;
+  accountantRemarks?: string | null;
+  paymentMode?: ReimbursementPaymentMode | null;
+  paymentHistory?: ReimbursementPaymentHistoryEntry[];
   note: string | null;
+}
+
+export interface FinanceVerificationChecklist {
+  gstChecked: boolean;
+  gstCertificateChecked: boolean;
+  legalNameChecked: boolean;
+  billingAddressChecked: boolean;
+  poChecked: boolean;
+  pdcChecked: boolean;
+  paymentProofChecked: boolean;
+  amountReceivedChecked: boolean;
+  outstandingChecked: boolean;
+  overdueChecked: boolean;
+  creditLimitChecked: boolean;
+  accountantRemarks: string;
+  verifiedBy: string;
+  verifiedAt: string;
+}
+
+export interface ManualPaymentVerification {
+  amountReceived: number;
+  paymentMode: PaymentVerificationMode;
+  utrNumber: string | null;
+  chequeNumber: string | null;
+  cashVoucherNumber: string | null;
+  paymentDate: string;
+  paymentProofUrl: string | null;
+  bankCashAccount: string;
+  verifiedBy: string;
+  verifiedAt: string;
+  differenceFromRequiredAmount: number;
+}
+
+export interface SalesOrderFinalChecklist {
+  gradeConfirmed: boolean;
+  quantityConfirmed: boolean;
+  rateConfirmed: boolean;
+  paymentTermsConfirmed: boolean;
+  requiredDateTimeConfirmed: boolean;
+  castingTypeConfirmed: boolean;
+  pumpDumpRequirementConfirmed: boolean;
+  receiverConfirmed: boolean;
+  phoneConfirmed: boolean;
+  deliveryAddressConfirmed: boolean;
+  plantConfirmed: boolean;
+  taxChallanModeConfirmed: boolean;
+  accountantRemarks: string;
+  verifiedBy: string;
+  verifiedAt: string;
+}
+
+export interface CreditApprovalHistoryEntry {
+  id: string;
+  creditLimitAmount: number;
+  creditPeriodDays: number;
+  riskCategory: CreditRiskCategory;
+  reason: string;
+  approvedBy: string;
+  approvedAt: string;
+  temporaryExceptionExpiresAt: string | null;
 }
 
 export interface AuditLogEntry {
@@ -681,6 +823,7 @@ export interface ManagerDashboardData {
   approvals: ApprovalRequest[];
   informalQuotationRequests: InformalQuotationRequest[];
   salesOrderRequests: SalesOrderRequest[];
+  reimbursementClaims: ReimbursementClaim[];
   helpRequests: HelpRequest[];
   tasks: Task[];
   targets: Target[];

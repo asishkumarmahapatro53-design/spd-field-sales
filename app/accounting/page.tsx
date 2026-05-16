@@ -39,7 +39,7 @@ export default async function AccountingPage() {
       statusLabel="ACCOUNTING_VIEW"
     >
       <section className="metric-grid mt-24">
-        <MetricCard label="Pending claims" value={data.reimbursementClaims.filter((entry) => entry.status === "REQUESTED" || entry.status === "OTP_SENT").length} note="Needs accountant action" />
+        <MetricCard label="Pending claims" value={data.reimbursementClaims.filter((entry) => entry.status !== "PAID" && entry.status !== "PAYMENT_REJECTED" && entry.status !== "REJECTED").length} note="Needs manager/accounts action" />
         <MetricCard label="Sales ledgers" value={data.agents.length} note="Active agent payment files" />
         <MetricCard label="Ledger queue" value={pendingFinanceOrders} note="Sales requests waiting for ledger creation" />
         <MetricCard label="Outstanding amount" value={`₹${Math.round(totalOutstanding).toLocaleString("en-IN")}`} note="Unpaid verified reimbursements" />

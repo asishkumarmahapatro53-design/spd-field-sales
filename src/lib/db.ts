@@ -533,6 +533,12 @@ function normalizeDatabase(rawDatabase: Database) {
   database.customerAccounts ??= createCustomerAccountSeeds();
   database.customerAccounts.forEach((account) => {
     account.odooPartnerId ??= null;
+    account.activeOrderExposure ??= 0;
+    account.overdueAmount ??= 0;
+    account.creditApprovalHistory ??= [];
+    if (account.riskLevel !== "LOW" && account.riskLevel !== "MEDIUM" && account.riskLevel !== "HIGH" && account.riskLevel !== "BLOCKED") {
+      account.riskLevel = "LOW";
+    }
   });
   database.customerInvoices ??= createCustomerInvoiceSeeds(database.customerAccounts.map((entry) => entry.id));
   database.documentTemplates ??= [];
@@ -772,6 +778,30 @@ function normalizeDatabase(rawDatabase: Database) {
     request.pumpOperatorPhone ??= null;
     request.pumpDispatchNote ??= null;
     request.paymentReceivedConfirmed ??= request.paymentType === "NORMAL";
+    request.financeChecklist ??= null;
+    request.manualPaymentVerification ??= null;
+    request.ledgerDecisionStatus ??= request.gstin ? "GST_CLIENT_ODOO_LEDGER" : "NON_GST_INTERNAL_LEDGER";
+    request.linkedLedgerCustomerName ??= null;
+    request.duplicateLedgerConfidence ??= null;
+    request.poPdcExceptionStatus ??= "NOT_REQUIRED";
+    request.poPdcExceptionReason ??= null;
+    request.poPdcExceptionRequestedBy ??= null;
+    request.poPdcExceptionRequestedAt ??= null;
+    request.poPdcExceptionDecidedBy ??= null;
+    request.poPdcExceptionDecidedAt ??= null;
+    request.creditRiskCategory ??= "LOW";
+    request.creditLimitAmount ??= null;
+    request.creditPeriodDays ??= null;
+    request.creditOverrideApprovedBy ??= null;
+    request.creditOverrideApprovedAt ??= null;
+    request.creditOverrideExpiresAt ??= null;
+    request.creditOverrideAmountLimit ??= null;
+    request.creditOverrideReason ??= null;
+    request.salesOrderFinalChecklist ??= null;
+    request.salesOrderPreviewConfirmedBy ??= null;
+    request.salesOrderPreviewConfirmedAt ??= null;
+    request.salesOrderPreviewHash ??= null;
+    request.salesOrderCopyUrl ??= null;
     request.financeReviewedBy ??= null;
     request.financeReviewedAt ??= null;
     request.financeNote ??= null;
@@ -818,15 +848,52 @@ function normalizeDatabase(rawDatabase: Database) {
 
   database.reimbursementClaims ??= [];
   (database.reimbursementClaims ?? []).forEach((claim) => {
+    if (claim.status === "REQUESTED") {
+      claim.status = "CLAIM_REQUESTED";
+    }
+    if (claim.status === "REJECTED") {
+      claim.status = "PAYMENT_REJECTED";
+    }
     claim.requestedBy ??= claim.agentId;
+    claim.approvedAmount ??= claim.totalAmount;
+    claim.paidAmount ??= claim.status === "PAID" ? claim.totalAmount : 0;
+    claim.balanceAmount ??= Math.max(0, claim.totalAmount - claim.paidAmount);
+    claim.outstandingAmount ??= claim.balanceAmount;
+    claim.managerVerifiedBy ??= null;
+    claim.managerVerifiedAt ??= null;
+    claim.managerVerificationNote ??= null;
+    claim.accountsPaymentPendingAt ??= null;
+    claim.cashVoucherNumber ??= null;
+    claim.cashVoucherCreatedAt ??= null;
+    claim.cashVoucherCreatedBy ??= null;
+    claim.cashVoucherAmount ??= null;
     claim.otpCode ??= null;
     claim.otpSentAt ??= null;
     claim.otpExpiresAt ??= null;
     claim.otpVerifiedAt ??= null;
+    claim.agentReceiptConfirmedAt ??= claim.status === "PAID" ? claim.otpVerifiedAt ?? claim.paidAt : null;
     claim.paidAt ??= null;
     claim.paidBy ??= null;
     claim.rejectedAt ??= null;
     claim.rejectedBy ??= null;
+    claim.accountantRemarks ??= null;
+    claim.paymentMode ??= null;
+    claim.paymentHistory ??= claim.status === "PAID" && claim.paidAt && claim.paidBy
+      ? [
+          {
+            id: randomUUID(),
+            amount: claim.totalAmount,
+            balanceAmount: 0,
+            outstandingAmount: 0,
+            paymentMode: "CASH",
+            cashVoucherNumber: claim.cashVoucherNumber ?? null,
+            referenceNumber: null,
+            remarks: claim.note ?? "Legacy paid reimbursement normalized.",
+            paidBy: claim.paidBy,
+            paidAt: claim.paidAt,
+          },
+        ]
+      : [];
     claim.note ??= null;
   });
 

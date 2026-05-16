@@ -40,15 +40,39 @@ function numberValue(value: number | null | undefined) {
 }
 
 function claimStatusLabel(claim: ReimbursementClaim) {
+  if (claim.status === "CLAIM_REQUESTED" || claim.status === "REQUESTED") {
+    return "Waiting for manager";
+  }
+
+  if (claim.status === "MANAGER_VERIFIED" || claim.status === "ACCOUNTS_PAYMENT_PENDING") {
+    return "Payment pending";
+  }
+
+  if (claim.status === "CASH_VOUCHER_CREATED") {
+    return "Voucher created";
+  }
+
   if (claim.status === "OTP_SENT") {
     return "OTP sent";
+  }
+
+  if (claim.status === "AGENT_RECEIPT_CONFIRMED") {
+    return "Receipt confirmed";
+  }
+
+  if (claim.status === "PARTIAL_PAYMENT" || claim.status === "BALANCE_OUTSTANDING") {
+    return "Partial payment";
+  }
+
+  if (claim.status === "PAYMENT_HOLD") {
+    return "Payment hold";
   }
 
   if (claim.status === "PAID") {
     return "Paid";
   }
 
-  if (claim.status === "REJECTED") {
+  if (claim.status === "REJECTED" || claim.status === "PAYMENT_REJECTED") {
     return "Rejected";
   }
 
@@ -93,7 +117,7 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
   const [error, setError] = useState("");
   const [isRefreshing, startTransition] = useTransition();
   const claimById = useMemo(() => new Map(claims.map((claim) => [claim.id, claim])), [claims]);
-  const pendingClaims = claims.filter((claim) => claim.status === "REQUESTED" || claim.status === "OTP_SENT");
+  const pendingClaims = claims.filter((claim) => claim.status !== "PAID" && claim.status !== "PAYMENT_REJECTED" && claim.status !== "REJECTED");
   const paidClaimIds = new Set(claims.filter((claim) => claim.status === "PAID").map((claim) => claim.id));
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null;
   const selectedAgentSummaries = selectedAgent
@@ -149,6 +173,32 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
     refreshWithMessage("OTP sent to the sales agent dashboard.");
   }
 
+  async function createCashVoucher(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    const formData = new FormData(event.currentTarget);
+    const claimId = `${formData.get("claimId") ?? ""}`;
+    const response = await fetch(`/api/reimbursement-claims/${claimId}/cash-voucher`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cashVoucherNumber: formData.get("cashVoucherNumber"),
+        amount: Number(formData.get("amount")),
+        remarks: formData.get("remarks"),
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      return;
+    }
+
+    event.currentTarget.reset();
+    setSelectedClaimId(claimId);
+    refreshWithMessage("Cash voucher created. OTP can now be sent.");
+  }
+
   async function verifyOtp(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage("");
@@ -168,7 +218,35 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
     }
 
     event.currentTarget.reset();
-    refreshWithMessage("Payment marked as paid after OTP verification.");
+    refreshWithMessage("Agent receipt confirmed by OTP. Record full or partial payment to close the claim.");
+  }
+
+  async function recordPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    const formData = new FormData(event.currentTarget);
+    const claimId = `${formData.get("claimId") ?? ""}`;
+    const action = `${formData.get("action") ?? "FULL"}`;
+    const response = await fetch(`/api/reimbursement-claims/${claimId}/payment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        amount: Number(formData.get("amount")),
+        paymentMode: formData.get("paymentMode"),
+        referenceNumber: formData.get("referenceNumber"),
+        remarks: formData.get("remarks"),
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      return;
+    }
+
+    event.currentTarget.reset();
+    refreshWithMessage(action === "FULL" ? "Reimbursement fully paid." : "Reimbursement action saved.");
   }
 
   return (
@@ -262,7 +340,18 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
                         </button>
                         <div className="claim-actions">
                           <span className={`status-badge status-${claim.status.toLowerCase()}`}>{claimStatusLabel(claim)}</span>
-                          {claim.status === "REQUESTED" ? (
+                          {claim.status === "ACCOUNTS_PAYMENT_PENDING" || claim.status === "MANAGER_VERIFIED" || claim.status === "PARTIAL_PAYMENT" || claim.status === "BALANCE_OUTSTANDING" || claim.status === "PAYMENT_HOLD" ? (
+                            <form className="otp-inline-form" onSubmit={createCashVoucher}>
+                              <input name="claimId" type="hidden" value={claim.id} />
+                              <input name="cashVoucherNumber" placeholder="Voucher no." required />
+                              <input name="amount" type="number" min="1" max={claim.outstandingAmount ?? claim.balanceAmount ?? claim.totalAmount} placeholder="Amount" required />
+                              <input name="remarks" placeholder="Remarks" required />
+                              <button className="button-secondary" type="submit" disabled={isRefreshing}>
+                                Create voucher
+                              </button>
+                            </form>
+                          ) : null}
+                          {claim.status === "CASH_VOUCHER_CREATED" ? (
                             <button className="button-secondary" type="button" disabled={isRefreshing} onClick={() => sendOtp(claim.id)}>
                               Send OTP
                             </button>
@@ -273,6 +362,29 @@ export function AccountingWorkspace({ agents, plants, reimbursements, claims, sa
                               <input name="otpCode" placeholder="OTP" inputMode="numeric" maxLength={6} required />
                               <button className="button" type="submit" disabled={isRefreshing}>
                                 Verify
+                              </button>
+                            </form>
+                          ) : null}
+                          {claim.status === "AGENT_RECEIPT_CONFIRMED" ? (
+                            <form className="otp-inline-form" onSubmit={recordPayment}>
+                              <input name="claimId" type="hidden" value={claim.id} />
+                              <select name="action" defaultValue="FULL">
+                                <option value="FULL">Full</option>
+                                <option value="PARTIAL">Partial</option>
+                                <option value="HOLD">Hold</option>
+                                <option value="REJECT">Reject</option>
+                              </select>
+                              <select name="paymentMode" defaultValue="CASH">
+                                <option value="CASH">Cash</option>
+                                <option value="CHEQUE">Cheque</option>
+                                <option value="NEFT">NEFT</option>
+                                <option value="UPI">UPI</option>
+                              </select>
+                              <input name="amount" type="number" min="1" max={claim.outstandingAmount ?? claim.balanceAmount ?? claim.totalAmount} placeholder="Amount" />
+                              <input name="referenceNumber" placeholder="Ref no." />
+                              <input name="remarks" placeholder="Remarks" required />
+                              <button className="button" type="submit" disabled={isRefreshing}>
+                                Save payment
                               </button>
                             </form>
                           ) : null}

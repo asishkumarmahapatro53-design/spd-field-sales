@@ -746,14 +746,16 @@ export function SalesOrderRequestCard({
         {needsPo ? (
           <div className="field">
             <label htmlFor="salesPoDocument">PO document</label>
-            <input id="salesPoDocument" name="poDocument" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" required={needsPo} />
+            <input id="salesPoDocument" name="poDocument" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" />
+            <span className="hint">If missing, Accounts must request manager exception before ledger approval.</span>
           </div>
         ) : null}
 
         {needsPdc ? (
           <div className="field">
             <label htmlFor="salesPdcDocument">PDC document</label>
-            <input id="salesPdcDocument" name="pdcDocument" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" required={needsPdc} />
+            <input id="salesPdcDocument" name="pdcDocument" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" />
+            <span className="hint">If missing, Accounts must request manager exception before ledger approval.</span>
           </div>
         ) : null}
 

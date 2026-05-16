@@ -132,18 +132,18 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
     startTransition(() => router.refresh());
   }
 
-  async function createLedger(id: string) {
+  async function createLedger(event: React.FormEvent<HTMLFormElement>, id: string) {
+    event.preventDefault();
     setBusyId(id);
     setMessage("");
     setError("");
+    const formData = new FormData(event.currentTarget);
+    formData.set("status", "FINANCE_VERIFIED");
+    formData.set("note", `${formData.get("accountantRemarks") ?? ""}`);
 
     const response = await fetch(`/api/sales-order-requests/${id}/finance-review`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        status: "FINANCE_VERIFIED",
-        note: "Accounts created the customer ledger and verified GST/payment documents.",
-      }),
+      body: formData,
     });
 
     if (!response.ok) {
@@ -178,16 +178,79 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
     refreshWithMessage("Ledger request rejected and sent back for correction.");
   }
 
-  async function createSalesOrder(id: string) {
+  async function requestPoPdcException(event: React.FormEvent<HTMLFormElement>, id: string) {
+    event.preventDefault();
     setBusyId(id);
     setMessage("");
     setError("");
+    const formData = new FormData(event.currentTarget);
+    const response = await fetch(`/api/sales-order-requests/${id}/po-pdc-exception`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "REQUEST",
+        reason: formData.get("exceptionReason"),
+      }),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    refreshWithMessage("PO/PDC exception sent to manager.");
+  }
+
+  async function createSalesOrder(event: React.FormEvent<HTMLFormElement>, id: string) {
+    event.preventDefault();
+    setBusyId(id);
+    setMessage("");
+    setError("");
+    const formData = new FormData(event.currentTarget);
+
+    const checklistResponse = await fetch(`/api/sales-order-requests/${id}/final-checklist`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        gradeConfirmed: formData.get("gradeConfirmed") === "on",
+        quantityConfirmed: formData.get("quantityConfirmed") === "on",
+        rateConfirmed: formData.get("rateConfirmed") === "on",
+        paymentTermsConfirmed: formData.get("paymentTermsConfirmed") === "on",
+        requiredDateTimeConfirmed: formData.get("requiredDateTimeConfirmed") === "on",
+        castingTypeConfirmed: formData.get("castingTypeConfirmed") === "on",
+        pumpDumpRequirementConfirmed: formData.get("pumpDumpRequirementConfirmed") === "on",
+        receiverConfirmed: formData.get("receiverConfirmed") === "on",
+        phoneConfirmed: formData.get("phoneConfirmed") === "on",
+        deliveryAddressConfirmed: formData.get("deliveryAddressConfirmed") === "on",
+        plantConfirmed: formData.get("plantConfirmed") === "on",
+        taxChallanModeConfirmed: formData.get("taxChallanModeConfirmed") === "on",
+        accountantRemarks: formData.get("salesOrderRemarks"),
+      }),
+    });
+
+    if (!checklistResponse.ok) {
+      setError(await parseApiError(checklistResponse));
+      setBusyId("");
+      return;
+    }
+
+    const previewResponse = await fetch(`/api/sales-order-requests/${id}/preview-confirmation`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!previewResponse.ok) {
+      setError(await parseApiError(previewResponse));
+      setBusyId("");
+      return;
+    }
 
     const response = await fetch(`/api/sales-order-requests/${id}/create-sales-order`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        note: "Accounts created the sales order from the verified ledger and sent it to production.",
+        note: formData.get("salesOrderRemarks"),
       }),
     });
 
@@ -252,13 +315,112 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
                 <span>{request.poDocumentUrl ? "PO uploaded" : "PO not uploaded"}</span>
                 <span>{request.pdcDocumentUrl ? "PDC uploaded" : "PDC not uploaded"}</span>
                 <span>{request.paymentReceivedConfirmed ? "Payment confirmed" : "Payment not confirmed"}</span>
+                <span>PO/PDC exception {request.poPdcExceptionStatus?.replaceAll("_", " ").toLowerCase() ?? "not required"}</span>
               </div>
               <LedgerDetails request={request} />
               <div className="button-row">
                 <DocumentLinks request={request} />
-                <button className="button" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void createLedger(request.id)}>
-                  {busyId === request.id ? "Saving..." : "Create ledger"}
-                </button>
+                {(request.poPdcExceptionStatus === "REQUIRED" || request.poPdcExceptionStatus === "REJECTED") ? (
+                  <form className="otp-inline-form" onSubmit={(event) => void requestPoPdcException(event, request.id)}>
+                    <input name="exceptionReason" placeholder="Reason for missing PO/PDC" required />
+                    <button className="button-secondary" type="submit" disabled={busyId === request.id || isRefreshing}>
+                      Request manager exception
+                    </button>
+                  </form>
+                ) : null}
+                <form className="form-grid" onSubmit={(event) => void createLedger(event, request.id)}>
+                  <div className="three-grid">
+                    <label className="row-meta"><input name="gstChecked" type="checkbox" required defaultChecked /> GST checked</label>
+                    <label className="row-meta"><input name="gstCertificateChecked" type="checkbox" required defaultChecked /> GST certificate checked</label>
+                    <label className="row-meta"><input name="legalNameChecked" type="checkbox" required defaultChecked /> Legal name checked</label>
+                    <label className="row-meta"><input name="billingAddressChecked" type="checkbox" required defaultChecked /> Billing address checked</label>
+                    <label className="row-meta"><input name="poChecked" type="checkbox" required defaultChecked /> PO checked</label>
+                    <label className="row-meta"><input name="pdcChecked" type="checkbox" required defaultChecked /> PDC checked</label>
+                    <label className="row-meta"><input name="paymentProofChecked" type="checkbox" required defaultChecked /> Payment proof checked</label>
+                    <label className="row-meta"><input name="amountReceivedChecked" type="checkbox" required defaultChecked /> Amount received checked</label>
+                    <label className="row-meta"><input name="outstandingChecked" type="checkbox" required defaultChecked /> Outstanding checked</label>
+                    <label className="row-meta"><input name="overdueChecked" type="checkbox" required defaultChecked /> Overdue checked</label>
+                    <label className="row-meta"><input name="creditLimitChecked" type="checkbox" required defaultChecked /> Credit limit checked</label>
+                  </div>
+                  <div className="three-grid">
+                    <div className="field">
+                      <label htmlFor={`ledger-decision-${request.id}`}>Ledger decision</label>
+                      <select id={`ledger-decision-${request.id}`} name="ledgerDecisionStatus" defaultValue={request.gstin ? "GST_CLIENT_ODOO_LEDGER" : "NON_GST_INTERNAL_LEDGER"}>
+                        <option value="GST_CLIENT_ODOO_LEDGER">GST client - Odoo ledger</option>
+                        <option value="NON_GST_INTERNAL_LEDGER">Non-GST - internal ledger</option>
+                        <option value="LINK_EXISTING_LEDGER">Link existing ledger</option>
+                        <option value="CREATE_NEW_SITE">Create new site</option>
+                        <option value="CREATE_NEW_LEDGER">Create new ledger</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`linked-ledger-${request.id}`}>Linked ledger/customer</label>
+                      <input id={`linked-ledger-${request.id}`} name="linkedLedgerCustomerName" placeholder="Existing ledger name if linked" />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`credit-risk-${request.id}`}>Risk category</label>
+                      <select id={`credit-risk-${request.id}`} name="creditRiskCategory" defaultValue="LOW">
+                        <option value="LOW">Low</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="HIGH">High</option>
+                        <option value="BLOCKED">Blocked</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`credit-limit-${request.id}`}>Credit limit</label>
+                      <input id={`credit-limit-${request.id}`} name="creditLimitAmount" type="number" min="0" defaultValue={request.paymentType === "CREDIT" ? request.amount : 0} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`credit-period-${request.id}`}>Credit period days</label>
+                      <input id={`credit-period-${request.id}`} name="creditPeriodDays" type="number" min="0" defaultValue={request.paymentType === "CREDIT" ? 30 : 0} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`amount-received-${request.id}`}>Amount received</label>
+                      <input id={`amount-received-${request.id}`} name="amountReceived" type="number" min="0" defaultValue={request.paymentReceivedConfirmed ? request.amount : 0} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`payment-mode-${request.id}`}>Payment mode</label>
+                      <select id={`payment-mode-${request.id}`} name="paymentMode" defaultValue="CASH">
+                        <option value="CASH">Cash</option>
+                        <option value="CHEQUE">Cheque</option>
+                        <option value="NEFT">NEFT</option>
+                        <option value="UPI">UPI</option>
+                        <option value="BANK_TRANSFER">Bank transfer</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`cash-voucher-${request.id}`}>Cash voucher no.</label>
+                      <input id={`cash-voucher-${request.id}`} name="cashVoucherNumber" placeholder="Required for cash" defaultValue={request.paymentReceivedConfirmed ? `ADV-${request.id.slice(0, 6)}` : ""} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`utr-${request.id}`}>UTR / bank ref</label>
+                      <input id={`utr-${request.id}`} name="utrNumber" placeholder="UTR if NEFT/UPI/bank" />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`cheque-${request.id}`}>Cheque no.</label>
+                      <input id={`cheque-${request.id}`} name="chequeNumber" placeholder="Cheque number" />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`payment-date-${request.id}`}>Payment date</label>
+                      <input id={`payment-date-${request.id}`} name="paymentDate" type="date" />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`payment-proof-${request.id}`}>Payment proof upload</label>
+                      <input id={`payment-proof-${request.id}`} name="paymentProof" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" />
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`bank-account-${request.id}`}>Bank/cash account</label>
+                      <input id={`bank-account-${request.id}`} name="bankCashAccount" placeholder="Cash / bank account" defaultValue="Cash account" required />
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`remarks-${request.id}`}>Accountant remarks</label>
+                    <textarea id={`remarks-${request.id}`} name="accountantRemarks" required defaultValue="Accounts verified GST, ledger, payment, PO/PDC, outstanding, overdue, and credit limit checklist." />
+                  </div>
+                  <button className="button" type="submit" disabled={busyId === request.id || isRefreshing}>
+                    {busyId === request.id ? "Saving..." : "Create ledger"}
+                  </button>
+                </form>
                 <button className="button-danger" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void rejectLedger(request.id)}>
                   {busyId === request.id ? "Saving..." : "Reject"}
                 </button>
@@ -290,9 +452,32 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
               <LedgerDetails request={request} />
               <div className="button-row">
                 <DocumentLinks request={request} />
-                <button className="button" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void createSalesOrder(request.id)}>
-                  {busyId === request.id ? "Creating..." : "Create sales order"}
-                </button>
+                <form className="form-grid" onSubmit={(event) => void createSalesOrder(event, request.id)}>
+                  <div className="three-grid">
+                    <label className="row-meta"><input name="gradeConfirmed" type="checkbox" required defaultChecked /> Grade confirmed</label>
+                    <label className="row-meta"><input name="quantityConfirmed" type="checkbox" required defaultChecked /> Quantity confirmed</label>
+                    <label className="row-meta"><input name="rateConfirmed" type="checkbox" required defaultChecked /> Rate confirmed</label>
+                    <label className="row-meta"><input name="paymentTermsConfirmed" type="checkbox" required defaultChecked /> Payment terms confirmed</label>
+                    <label className="row-meta"><input name="requiredDateTimeConfirmed" type="checkbox" required defaultChecked /> Required date/time confirmed</label>
+                    <label className="row-meta"><input name="castingTypeConfirmed" type="checkbox" required defaultChecked /> Casting type confirmed</label>
+                    <label className="row-meta"><input name="pumpDumpRequirementConfirmed" type="checkbox" required defaultChecked /> Pump/dump confirmed</label>
+                    <label className="row-meta"><input name="receiverConfirmed" type="checkbox" required defaultChecked /> Receiver confirmed</label>
+                    <label className="row-meta"><input name="phoneConfirmed" type="checkbox" required defaultChecked /> Phone confirmed</label>
+                    <label className="row-meta"><input name="deliveryAddressConfirmed" type="checkbox" required defaultChecked /> Address confirmed</label>
+                    <label className="row-meta"><input name="plantConfirmed" type="checkbox" required defaultChecked /> Plant confirmed</label>
+                    <label className="row-meta"><input name="taxChallanModeConfirmed" type="checkbox" required defaultChecked /> Tax/challan mode confirmed</label>
+                  </div>
+                  <div className="note-box">
+                    Preview: {request.grade} | {request.quantity} CUM | {money(request.amount)} | {request.receiverName} | {request.siteAddress}
+                  </div>
+                  <div className="field">
+                    <label htmlFor={`sales-order-remarks-${request.id}`}>Accountant remarks</label>
+                    <textarea id={`sales-order-remarks-${request.id}`} name="salesOrderRemarks" required defaultValue="Final sales order checklist and preview confirmed by Accounts." />
+                  </div>
+                  <button className="button" type="submit" disabled={busyId === request.id || isRefreshing}>
+                    {busyId === request.id ? "Creating..." : "Confirm preview & create sales order"}
+                  </button>
+                </form>
               </div>
             </article>
           ))
@@ -323,6 +508,19 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
                 <span>{toIndiaTimeLabel(request.createdAt)}</span>
               </div>
               {request.scheduleDateTime ? <p>Production requested for {toIndiaTimeLabel(request.scheduleDateTime)}</p> : null}
+              <div className="row-meta">
+                <span>Remaining {request.remainingQuantity} CUM</span>
+                <span>Challan status: pending/production</span>
+                <span>Invoice/e-invoice: {request.odooSalesOrderSyncStatus?.replaceAll("_", " ").toLowerCase() ?? "not required"}</span>
+                <span>E-way bill: status pending</span>
+                <span>Ledger debit: after site acceptance</span>
+                <span>Payment received: {request.paymentReceivedConfirmed ? "yes" : "no"}</span>
+              </div>
+              {request.salesOrderCopyUrl ? (
+                <a className="button-ghost" href={request.salesOrderCopyUrl} target="_blank" rel="noreferrer">
+                  Download sales order copy
+                </a>
+              ) : null}
             </article>
           );
         })}
