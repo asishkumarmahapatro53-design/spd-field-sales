@@ -3836,7 +3836,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.emailStatus = "FAILED";
       nextRequest.emailError = `PDF generation failed: ${errorMessage}`;
       nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
-      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      nextRequest.whatsappError = "WhatsApp sending is pending n8n webhook configuration.";
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "PDF_FAILED", errorMessage);
       return nextRequest;
     });
@@ -3880,7 +3880,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.emailTo = request.stakeholderEmail;
       nextRequest.emailCc = ccEmails;
       nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
-      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      nextRequest.whatsappError = "WhatsApp sending is pending n8n webhook configuration.";
       nextRequest.deliveryChannels ??= [];
       nextRequest.deliveryChannels.push({ channel: "EMAIL", sentAt: nextRequest.emailSentAt, sentBy: manager.id });
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_SENT", `Sent quotation email to ${request.stakeholderEmail}.`);
@@ -3899,7 +3899,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.emailTo = request.stakeholderEmail;
       nextRequest.emailCc = ccEmails;
       nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
-      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      nextRequest.whatsappError = "WhatsApp sending is pending n8n webhook configuration.";
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_FAILED", errorMessage);
       return nextRequest;
     });

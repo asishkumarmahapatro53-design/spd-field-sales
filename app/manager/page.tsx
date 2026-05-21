@@ -11,7 +11,8 @@ export default async function ManagerPage() {
   const data = await getManagerDashboardData(user);
   const pendingApprovals = data.approvals.filter((entry) => entry.status === "PENDING").length;
   const pendingInformalQuotations = data.informalQuotationRequests.filter((entry) => entry.status === "PENDING").length;
-  const pendingCommercialDecisions = pendingApprovals + pendingInformalQuotations;
+  const pendingLeadClosures = data.leads.filter((entry) => entry.closureStatus === "PENDING_MANAGER_APPROVAL").length;
+  const pendingCommercialDecisions = pendingApprovals + pendingInformalQuotations + pendingLeadClosures;
   const pendingOrders = data.salesOrderRequests.filter((entry) => entry.status === "SCHEDULE_PENDING").length;
   const openCorrections = data.helpRequests.filter((entry) => entry.status === "OPEN").length;
   const openSessions = data.workdaySessions.filter((entry) => entry.status === "OPEN").length;
@@ -28,6 +29,10 @@ export default async function ManagerPage() {
       data.agents.filter((agent) => agent.homePlantId === plant.id && agent.status === "ACTIVE").map((agent) => agent.id),
     );
 
+    const pendingLeadClosuresForPlant = data.leads.filter(
+      (entry) => entry.plantId === plant.id && entry.closureStatus === "PENDING_MANAGER_APPROVAL",
+    ).length;
+
     return {
       id: plant.id,
       name: plant.name,
@@ -38,7 +43,8 @@ export default async function ManagerPage() {
       ).length,
       pendingApprovals:
         data.approvals.filter((entry) => entry.plantId === plant.id && entry.status === "PENDING").length +
-        data.informalQuotationRequests.filter((entry) => entry.plantId === plant.id && entry.status === "PENDING").length,
+        data.informalQuotationRequests.filter((entry) => entry.plantId === plant.id && entry.status === "PENDING").length +
+        pendingLeadClosuresForPlant,
     };
   });
 
@@ -54,7 +60,7 @@ export default async function ManagerPage() {
 
       <section className="metric-grid mt-24">
         <MetricCard label="Agents on duty" value={openSessions} note="Open workday sessions across plants" />
-        <MetricCard label="Pending decisions" value={pendingCommercialDecisions} note="Final approvals and informal quotations waiting" />
+        <MetricCard label="Pending decisions" value={pendingCommercialDecisions} note="Approvals, quotations, and dead/lost requests waiting" />
         <MetricCard label="Pending orders" value={pendingOrders} note="Sales/SLA requests waiting for decision" />
         <MetricCard label="Open corrections" value={openCorrections} note="Agent support requests" />
       </section>
@@ -80,7 +86,7 @@ export default async function ManagerPage() {
           eyebrow="Commercial"
           title="Pending Approvals"
           value={pendingCommercialDecisions}
-          note="Review final price requests and informal quotation documents in one focused decision page."
+          note="Review final price requests, informal quotation documents, and dead/lost closure requests."
           href="/manager/approvals"
         />
         <ManagerWorkspaceCard

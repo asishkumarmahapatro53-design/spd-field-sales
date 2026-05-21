@@ -78,6 +78,39 @@ NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY="your-mappls-static-key"
 
 Add this value in AWS Amplify and whitelist the production domain in Mappls. Direction buttons intentionally continue to open Google Maps.
 
+## WhatsApp verification through n8n
+
+Set `WHATSAPP_PROVIDER="n8n"` and add `N8N_WHATSAPP_WEBHOOK_URL` in AWS Amplify. When the agent clicks **Verify WhatsApp**, SPD posts this verification request to n8n:
+
+```json
+{
+  "phone": "9876543210",
+  "to": "+919876543210",
+  "e164": "919876543210",
+  "countryCode": "91",
+  "purpose": "SPD_WHATSAPP_CONTACT_VERIFICATION",
+  "message": "Dear customer..."
+}
+```
+
+n8n should send the WhatsApp message and receive the customer reply. When the customer replies, n8n should call:
+
+```text
+POST https://spdautomation.civilsai.in/api/webhooks/whatsapp
+```
+
+with:
+
+```json
+{
+  "phone": "9876543210",
+  "text": "YES",
+  "messageId": "optional-provider-message-id"
+}
+```
+
+If `WHATSAPP_WEBHOOK_SHARED_SECRET` is set, include `?token=YOUR_SECRET` or the `x-spd-webhook-token` header.
+
 ## Render + Supabase free path
 
 If you want the zero-card testing path:

@@ -108,12 +108,13 @@ async function getSalesAgentNotifications(user: User) {
 
 async function getManagerNotifications(user: User) {
   const plantId = user.homePlantId;
-  const [approvals, informalQuotations, scopedSessions, salesOrders, helpRequests] = await Promise.all([
+  const [approvals, informalQuotations, scopedSessions, salesOrders, helpRequests, leads] = await Promise.all([
     readCollection("approvalRequests"),
     readCollection("informalQuotationRequests"),
     plantId ? readCollection("workdaySessions", { filters: [{ field: "plantId", op: "==", value: plantId }] }) : Promise.resolve([]),
     readCollection("salesOrderRequests"),
     readCollection("helpRequests"),
+    readCollection("leads"),
   ]);
   const readings = plantId
     ? await readCollectionByFieldValues(
@@ -139,6 +140,14 @@ async function getManagerNotifications(user: User) {
       label: "Informal quotations",
       detail: "Quotation documents need manager approval.",
       count: inScope(informalQuotations).filter((entry) => entry.status === "PENDING").length,
+      href: "/manager/approvals",
+      tone: "warning",
+    }),
+    section({
+      id: "manager-lead-closures",
+      label: "Dead/lost requests",
+      detail: "Lead closure requests need manager approval.",
+      count: inScope(leads).filter((entry) => entry.closureStatus === "PENDING_MANAGER_APPROVAL").length,
       href: "/manager/approvals",
       tone: "warning",
     }),
