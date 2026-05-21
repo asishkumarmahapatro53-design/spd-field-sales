@@ -68,6 +68,16 @@ FIREBASE_USE_STORAGE="false"
 
 This Firebase adapter is designed for real workflow testing. New writes are stored in Firestore collections under `FIREBASE_APP_STATE_COLLECTION`. If older data exists in the legacy document `app_state/main`, the app reads it and copies it into the collection structure without deleting the legacy document. Do not change `FIREBASE_PROJECT_ID`, `FIREBASE_FIRESTORE_DATABASE_ID`, or `FIREBASE_APP_STATE_COLLECTION` after real users start entering data unless you are intentionally migrating the data.
 
+## Mappls maps
+
+Reverse geocoding runs server-side with `MAPPLS_REST_API_KEY`. The agent lead map also needs a browser-safe Mappls static key:
+
+```env
+NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY="your-mappls-static-key"
+```
+
+Add this value in AWS Amplify and whitelist the production domain in Mappls. Direction buttons intentionally continue to open Google Maps.
+
 ## Render + Supabase free path
 
 If you want the zero-card testing path:

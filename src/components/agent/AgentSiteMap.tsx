@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { toIndiaTimeLabel } from "@/lib/date";
 import type { LeadStage, SiteMapMarker } from "@/lib/types";
 
@@ -22,6 +22,89 @@ const LEAD_STAGE_META: Record<LeadStage, { label: string; pinColor: SiteMapMarke
   LOST: { label: "Lost", pinColor: "RED" },
 };
 
+const MAPPLS_MAP_KEY =
+  process.env.NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY?.trim() || process.env.NEXT_PUBLIC_MAPPLS_STATIC_KEY?.trim() || "";
+
+const PIN_COLOR_HEX: Record<SiteMapMarker["pinColor"], string> = {
+  GREEN: "#15803d",
+  YELLOW: "#ca8a04",
+  ORANGE: "#ea580c",
+  RED: "#dc2626",
+  GRAY: "#6b7280",
+  BLUE: "#2563eb",
+};
+
+type MapplsMap = {
+  addListener?: (eventName: string, handler: () => void) => void;
+  setCenter?: (center: { lat: number; lng: number }) => void;
+  setZoom?: (zoom: number) => void;
+  remove?: () => void;
+};
+
+type MapplsMarker = {
+  remove?: () => void;
+  setMap?: (map: MapplsMap | null) => void;
+};
+
+declare global {
+  interface Window {
+    mappls?: {
+      Map: new (id: string, options: Record<string, unknown>) => MapplsMap;
+      Marker: new (options: Record<string, unknown>) => MapplsMarker;
+    };
+  }
+}
+
+let mapplsScriptPromise: Promise<void> | null = null;
+
+function loadMapplsScript(key: string) {
+  if (typeof window === "undefined") {
+    return Promise.resolve();
+  }
+
+  if (window.mappls?.Map && window.mappls.Marker) {
+    return Promise.resolve();
+  }
+
+  if (mapplsScriptPromise) {
+    return mapplsScriptPromise;
+  }
+
+  mapplsScriptPromise = new Promise((resolve, reject) => {
+    const existingScript = document.querySelector<HTMLScriptElement>("script[data-mappls-sdk='true']");
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Mappls SDK failed to load.")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.defer = true;
+    script.dataset.mapplsSdk = "true";
+    script.src = `https://sdk.mappls.com/map/sdk/web?v=3.0&access_token=${encodeURIComponent(key)}`;
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener("error", () => reject(new Error("Mappls SDK failed to load.")), { once: true });
+    document.head.appendChild(script);
+  });
+
+  return mapplsScriptPromise;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function getMarkerHtml(marker: SiteMapMarker, selected: boolean) {
+  const label = escapeHtml(marker.siteName);
+  return `<button class="site-map-sdk-pin${selected ? " is-selected" : ""}" data-site-map-marker="${escapeHtml(marker.siteId)}" style="--pin-color:${PIN_COLOR_HEX[marker.pinColor]}" type="button" aria-label="${label}" title="${label}"></button>`;
+}
+
 function getGoogleDirectionsUrl(marker: SiteMapMarker) {
   if (marker.latLng) {
     return `https://www.google.com/maps/dir/?api=1&destination=${marker.latLng.lat},${marker.latLng.lng}`;
@@ -39,8 +122,14 @@ function normalizePosition(value: number, min: number, max: number) {
 }
 
 export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
+  const mapId = `agent-lead-map-${useId().replaceAll(":", "")}`;
+  const mapRef = useRef<MapplsMap | null>(null);
+  const markerRefs = useRef<MapplsMarker[]>([]);
   const [showClosed, setShowClosed] = useState(false);
   const [selectedId, setSelectedId] = useState(markers[0]?.siteId ?? "");
+  const [mapStatus, setMapStatus] = useState<"missing-key" | "loading" | "ready" | "error">(
+    MAPPLS_MAP_KEY ? "loading" : "missing-key",
+  );
   const [busyVerification, setBusyVerification] = useState<"CALL" | "WHATSAPP" | null>(null);
   const [verificationNote, setVerificationNote] = useState("");
   const [verificationError, setVerificationError] = useState("");
@@ -49,8 +138,8 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
     [markers, showClosed],
   );
   const selectedMarker = visibleMarkers.find((marker) => marker.siteId === selectedId) ?? visibleMarkers[0] ?? null;
-  const locatedMarkers = visibleMarkers.filter((marker) => marker.latLng);
-  const bounds = useMemo(() => {
+  const locatedMarkers = useMemo(() => visibleMarkers.filter((marker) => marker.latLng), [visibleMarkers]);
+  const fallbackBounds = useMemo(() => {
     const lats = locatedMarkers.map((marker) => marker.latLng?.lat ?? 0);
     const lngs = locatedMarkers.map((marker) => marker.latLng?.lng ?? 0);
     return {
@@ -60,6 +149,124 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
       maxLng: Math.max(...lngs),
     };
   }, [locatedMarkers]);
+  const mapCenter = useMemo(() => {
+    if (!locatedMarkers.length) {
+      return null;
+    }
+
+    const totals = locatedMarkers.reduce(
+      (current, marker) => ({
+        lat: current.lat + (marker.latLng?.lat ?? 0),
+        lng: current.lng + (marker.latLng?.lng ?? 0),
+      }),
+      { lat: 0, lng: 0 },
+    );
+
+    return {
+      lat: totals.lat / locatedMarkers.length,
+      lng: totals.lng / locatedMarkers.length,
+    };
+  }, [locatedMarkers]);
+
+  useEffect(() => {
+    const container = document.getElementById(mapId);
+    if (!container) return undefined;
+
+    const handleMarkerClick = (event: MouseEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-site-map-marker]") : null;
+      const markerId = target?.dataset.siteMapMarker;
+      if (markerId) {
+        setSelectedId(markerId);
+      }
+    };
+
+    container.addEventListener("click", handleMarkerClick);
+    return () => container.removeEventListener("click", handleMarkerClick);
+  }, [mapId]);
+
+  useEffect(() => {
+    if (!locatedMarkers.length) {
+      markerRefs.current.forEach((marker) => {
+        if (marker.remove) marker.remove();
+        else marker.setMap?.(null);
+      });
+      markerRefs.current = [];
+      return undefined;
+    }
+
+    if (!MAPPLS_MAP_KEY) {
+      setMapStatus("missing-key");
+      return undefined;
+    }
+
+    let cancelled = false;
+    setMapStatus(mapRef.current ? "ready" : "loading");
+
+    const renderMarkers = () => {
+      const map = mapRef.current;
+      if (!map || !window.mappls?.Marker) return;
+
+      markerRefs.current.forEach((marker) => {
+        if (marker.remove) marker.remove();
+        else marker.setMap?.(null);
+      });
+      markerRefs.current = locatedMarkers
+        .filter((marker) => marker.latLng)
+        .map((marker) => {
+          return new window.mappls!.Marker({
+            map,
+            position: { lat: marker.latLng!.lat, lng: marker.latLng!.lng },
+            html: getMarkerHtml(marker, marker.siteId === selectedMarker?.siteId),
+            popupHtml: `<strong>${escapeHtml(marker.siteName)}</strong><br>${escapeHtml(marker.siteAddress)}`,
+          });
+        });
+    };
+
+    void loadMapplsScript(MAPPLS_MAP_KEY)
+      .then(() => {
+        if (cancelled) return;
+
+        if (!window.mappls?.Map || !window.mappls.Marker || !mapCenter) {
+          setMapStatus("error");
+          return;
+        }
+
+        if (!mapRef.current) {
+          mapRef.current = new window.mappls.Map(mapId, {
+            center: mapCenter,
+            zoom: locatedMarkers.length > 1 ? 11 : 15,
+            zoomControl: true,
+            location: true,
+          });
+          mapRef.current.addListener?.("load", renderMarkers);
+        } else {
+          mapRef.current.setCenter?.(mapCenter);
+          mapRef.current.setZoom?.(locatedMarkers.length > 1 ? 11 : 15);
+        }
+
+        window.setTimeout(renderMarkers, 250);
+        setMapStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setMapStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [locatedMarkers, mapCenter, mapId, selectedMarker?.siteId]);
+
+  useEffect(() => {
+    return () => {
+      markerRefs.current.forEach((marker) => {
+        if (marker.remove) marker.remove();
+        else marker.setMap?.(null);
+      });
+      markerRefs.current = [];
+      mapRef.current?.remove?.();
+      mapRef.current = null;
+    };
+  }, []);
 
   async function openDirections(marker: SiteMapMarker) {
     await fetch(`/api/sites/${marker.siteId}/directions`, { method: "POST" }).catch(() => undefined);
@@ -124,22 +331,30 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
         </label>
       </div>
 
-      <div className="site-map-canvas" aria-label="Site map view">
-        {locatedMarkers.map((marker) => {
-          const left = normalizePosition(marker.latLng?.lng ?? 0, bounds.minLng, bounds.maxLng);
-          const top = 100 - normalizePosition(marker.latLng?.lat ?? 0, bounds.minLat, bounds.maxLat);
-          return (
-            <button
-              key={marker.siteId}
-              className={`site-map-pin ${PIN_CLASS[marker.pinColor]}`}
-              type="button"
-              style={{ left: `${left}%`, top: `${top}%` }}
-              title={marker.siteName}
-              aria-label={marker.siteName}
-              onClick={() => setSelectedId(marker.siteId)}
-            />
-          );
-        })}
+      <div className="site-map-canvas is-sdk-map" aria-label="Site map view">
+        <div id={mapId} className="site-map-sdk-canvas" />
+        {mapStatus === "missing-key" ? (
+          <div className="site-map-status">Mappls map key missing. Add NEXT_PUBLIC_MAPPLS_MAP_SDK_KEY in AWS.</div>
+        ) : null}
+        {mapStatus === "loading" ? <div className="site-map-status">Loading Mappls map...</div> : null}
+        {mapStatus === "error" ? <div className="site-map-status">Mappls map could not load. Check the static key and domain whitelist.</div> : null}
+        {mapStatus !== "ready"
+          ? locatedMarkers.map((marker) => {
+              const left = normalizePosition(marker.latLng?.lng ?? 0, fallbackBounds.minLng, fallbackBounds.maxLng);
+              const top = 100 - normalizePosition(marker.latLng?.lat ?? 0, fallbackBounds.minLat, fallbackBounds.maxLat);
+              return (
+                <button
+                  key={marker.siteId}
+                  className={`site-map-pin ${PIN_CLASS[marker.pinColor]}`}
+                  type="button"
+                  style={{ left: `${left}%`, top: `${top}%` }}
+                  title={marker.siteName}
+                  aria-label={marker.siteName}
+                  onClick={() => setSelectedId(marker.siteId)}
+                />
+              );
+            })
+          : null}
         {!locatedMarkers.length ? <div className="site-map-empty">Missing location list</div> : null}
       </div>
 

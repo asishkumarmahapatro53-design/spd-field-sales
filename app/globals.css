@@ -3629,6 +3629,29 @@ th {
   background-size: 44px 44px;
 }
 
+.site-map-canvas.is-sdk-map {
+  background: #eef6f0;
+}
+
+.site-map-sdk-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.site-map-status {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+
 .site-map-pin {
   position: absolute;
   width: 18px;
@@ -3638,6 +3661,21 @@ th {
   border-radius: 999px;
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.22);
   cursor: pointer;
+}
+
+.site-map-sdk-pin {
+  width: 20px;
+  height: 20px;
+  border: 3px solid #fff;
+  border-radius: 999px;
+  background: var(--pin-color, #2563eb);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.28);
+  cursor: pointer;
+}
+
+.site-map-sdk-pin.is-selected {
+  outline: 3px solid rgba(15, 23, 42, 0.16);
+  transform: scale(1.16);
 }
 
 .site-map-detail,
