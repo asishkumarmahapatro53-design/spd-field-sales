@@ -7,7 +7,7 @@ import { getAgentDashboardData } from "@/lib/repository";
 export default async function AgentMapPage() {
   const user = await requireUser("SALES_AGENT");
   const data = await getAgentDashboardData(user, {
-    sections: ["leads"],
+    sections: ["leads", "leadSites"],
   });
 
   return (
