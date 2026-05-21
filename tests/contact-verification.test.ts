@@ -62,13 +62,15 @@ describe("contact verification helpers", () => {
     expect(messages).toMatchObject([{ from: "9876543210", text: "YES", provider: "cloud", providerMessageId: "wamid.1" }]);
   });
 
-  it("extracts inbound n8n WhatsApp reply messages", () => {
+  it("extracts inbound Evolution WhatsApp messages", () => {
     const messages = extractWhatsappInboundMessages({
-      phone: "919876543210",
-      text: "confirmed",
-      messageId: "n8n-1",
+      event: "messages.upsert",
+      data: {
+        key: { remoteJid: "919876543210@s.whatsapp.net", id: "evo-1" },
+        message: { conversation: "confirmed" },
+      },
     });
 
-    expect(messages).toMatchObject([{ from: "9876543210", text: "confirmed", provider: "n8n", providerMessageId: "n8n-1" }]);
+    expect(messages).toMatchObject([{ from: "9876543210", text: "confirmed", provider: "evolution", providerMessageId: "evo-1" }]);
   });
 });

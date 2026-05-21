@@ -55,14 +55,14 @@ export function normalizeIndianMobileForProvider(phone: string) {
 }
 
 export function getContactVerificationEnvSummary(): ContactVerificationConfigSummary {
-  const whatsappProvider = (trimEnv("WHATSAPP_PROVIDER") || "n8n").toLowerCase();
+  const whatsappProvider = (trimEnv("WHATSAPP_PROVIDER") || "evolution").toLowerCase();
   const callProvider = (trimEnv("CALL_VERIFICATION_PROVIDER") || "webhook").toLowerCase();
   const gpsProvider = trimEnv("GPS_GEOCODER") || "mappls";
 
   const whatsappConfigured =
     whatsappProvider === "cloud"
       ? Boolean(trimEnv("WHATSAPP_CLOUD_TOKEN") && trimEnv("WHATSAPP_CLOUD_PHONE_NUMBER_ID"))
-      : Boolean(trimEnv("N8N_WHATSAPP_WEBHOOK_URL"));
+      : Boolean(trimEnv("EVOLUTION_API_URL") && trimEnv("EVOLUTION_API_KEY") && trimEnv("EVOLUTION_INSTANCE"));
   const callConfigured = Boolean(trimEnv("CALL_VERIFICATION_API_URL") && trimEnv("CALL_VERIFICATION_API_KEY"));
   const gpsConfigured = gpsProvider === "mappls" ? Boolean(trimEnv("MAPPLS_REST_API_KEY")) : true;
 
@@ -136,6 +136,18 @@ function normalizeInboundPhone(value: unknown) {
   return digits.slice(-10);
 }
 
+function getEvolutionMessageText(data: Record<string, unknown>) {
+  return (
+    readNestedString(data, ["message", "conversation"]) ||
+    readNestedString(data, ["message", "extendedTextMessage", "text"]) ||
+    readNestedString(data, ["message", "ephemeralMessage", "message", "extendedTextMessage", "text"]) ||
+    readNestedString(data, ["message", "buttonsResponseMessage", "selectedDisplayText"]) ||
+    readNestedString(data, ["message", "listResponseMessage", "title"]) ||
+    readNestedString(data, ["text"]) ||
+    readNestedString(data, ["messageText"])
+  );
+}
+
 function pushInboundMessage(
   messages: WhatsappInboundMessage[],
   provider: string,
@@ -165,36 +177,6 @@ export function extractWhatsappInboundMessages(payload: unknown): WhatsappInboun
   }
 
   const root = payload as Record<string, unknown>;
-  const data = (root.data && typeof root.data === "object" ? root.data : root) as Record<string, unknown>;
-
-  const n8nFrom =
-    readNestedString(root, ["phone"]) ||
-    readNestedString(root, ["from"]) ||
-    readNestedString(root, ["number"]) ||
-    readNestedString(root, ["waId"]) ||
-    readNestedString(data, ["phone"]) ||
-    readNestedString(data, ["from"]) ||
-    readNestedString(data, ["number"]) ||
-    readNestedString(data, ["waId"]);
-  const n8nText =
-    readNestedString(root, ["text"]) ||
-    readNestedString(root, ["message"]) ||
-    readNestedString(root, ["body"]) ||
-    readNestedString(root, ["reply"]) ||
-    readNestedString(root, ["messageText"]) ||
-    readNestedString(data, ["text"]) ||
-    readNestedString(data, ["message"]) ||
-    readNestedString(data, ["body"]) ||
-    readNestedString(data, ["reply"]) ||
-    readNestedString(data, ["messageText"]);
-  const n8nId =
-    readNestedString(root, ["providerMessageId"]) ||
-    readNestedString(root, ["messageId"]) ||
-    readNestedString(root, ["id"]) ||
-    readNestedString(data, ["providerMessageId"]) ||
-    readNestedString(data, ["messageId"]) ||
-    readNestedString(data, ["id"]);
-  pushInboundMessage(messages, "n8n", n8nFrom, n8nText, n8nId, payload);
 
   const entries = Array.isArray(root.entry) ? root.entry : [];
   for (const entry of entries) {
@@ -214,51 +196,56 @@ export function extractWhatsappInboundMessages(payload: unknown): WhatsappInboun
     }
   }
 
+  const data = (root.data && typeof root.data === "object" ? root.data : root) as Record<string, unknown>;
+  const evolutionFrom =
+    readNestedString(data, ["key", "remoteJid"]) ||
+    readNestedString(data, ["remoteJid"]) ||
+    readNestedString(data, ["from"]) ||
+    readNestedString(root, ["from"]) ||
+    readNestedString(root, ["number"]);
+  const evolutionText = getEvolutionMessageText(data) || readNestedString(root, ["text"]) || readNestedString(root, ["message"]);
+  const evolutionId = readNestedString(data, ["key", "id"]) || readNestedString(data, ["id"]) || readNestedString(root, ["id"]);
+  pushInboundMessage(messages, "evolution", evolutionFrom, evolutionText, evolutionId, payload);
+
   return messages;
 }
 
 export async function sendWhatsappVerification(phone: string, message: string): Promise<VerificationSendResult> {
   const normalized = normalizeIndianMobileForProvider(phone);
-  const provider = (trimEnv("WHATSAPP_PROVIDER") || "n8n").toLowerCase();
+  const provider = (trimEnv("WHATSAPP_PROVIDER") || "evolution").toLowerCase();
 
   if (provider === "cloud") {
     return sendWhatsappCloudVerification(normalized.e164, message);
   }
 
-  return sendN8nWhatsappVerification(normalized, message);
+  return sendEvolutionWhatsappVerification(normalized.e164, message);
 }
 
-async function sendN8nWhatsappVerification(
-  number: ReturnType<typeof normalizeIndianMobileForProvider>,
-  message: string,
-): Promise<VerificationSendResult> {
-  const webhookUrl = trimEnv("N8N_WHATSAPP_WEBHOOK_URL");
-  const webhookSecret = trimEnv("N8N_WHATSAPP_WEBHOOK_SECRET");
-  const provider = "n8n";
+async function sendEvolutionWhatsappVerification(number: string, message: string): Promise<VerificationSendResult> {
+  const apiUrl = trimEnv("EVOLUTION_API_URL").replace(/\/+$/, "");
+  const apiKey = trimEnv("EVOLUTION_API_KEY");
+  const instance = trimEnv("EVOLUTION_INSTANCE");
+  const provider = "evolution";
 
-  if (!webhookUrl) {
+  if (!apiUrl || !apiKey || !instance) {
     return {
       provider,
       status: "PENDING_CONFIGURATION",
       providerMessageId: null,
-      error: "n8n WhatsApp webhook is not configured. Add N8N_WHATSAPP_WEBHOOK_URL in AWS.",
+      error: "Evolution API is not configured. Add EVOLUTION_API_URL, EVOLUTION_API_KEY, and EVOLUTION_INSTANCE in AWS.",
     };
   }
 
   try {
-    const response = await fetch(webhookUrl, {
+    const response = await fetch(`${apiUrl}/message/sendText/${encodeURIComponent(instance)}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(webhookSecret ? { Authorization: `Bearer ${webhookSecret}`, "x-spd-webhook-token": webhookSecret } : {}),
+        apikey: apiKey,
       },
       body: JSON.stringify({
-        phone: number.national,
-        to: number.tel,
-        e164: number.e164,
-        countryCode: "91",
-        purpose: "SPD_WHATSAPP_CONTACT_VERIFICATION",
-        message,
+        number,
+        text: message,
       }),
       signal: AbortSignal.timeout(Number(trimEnv("WHATSAPP_TIMEOUT_MS")) || 15000),
     });
@@ -269,7 +256,7 @@ async function sendN8nWhatsappVerification(
         provider,
         status: "FAILED",
         providerMessageId: null,
-        error: sanitizeProviderError((payload.message as string | undefined) ?? `n8n WhatsApp webhook returned HTTP ${response.status}.`),
+        error: sanitizeProviderError((payload.message as string | undefined) ?? `Evolution API returned HTTP ${response.status}.`),
         metadata: payload,
       };
     }
@@ -277,7 +264,7 @@ async function sendN8nWhatsappVerification(
     return {
       provider,
       status: "SENT",
-      providerMessageId: String(payload.id ?? payload.executionId ?? payload.messageId ?? "") || null,
+      providerMessageId: String(payload.key ?? payload.id ?? payload.messageId ?? "") || null,
       error: null,
       metadata: payload,
     };
