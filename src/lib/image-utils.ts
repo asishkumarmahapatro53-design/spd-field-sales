@@ -236,19 +236,14 @@ export function getCurrentPosition(): Promise<GeolocationCoordinates | null> {
   });
 }
 
-/**
- * Reverse geocode GPS coordinates using the free OpenStreetMap Nominatim API.
- * Returns a human-readable address string or null on failure.
- */
 export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`,
-      { headers: { "Accept-Language": "en" } },
+      `/api/geo/reverse?lat=${encodeURIComponent(String(lat))}&lng=${encodeURIComponent(String(lng))}`,
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as { display_name?: string };
-    return data.display_name ?? null;
+    const data = (await res.json()) as { address?: string | null };
+    return data.address ?? null;
   } catch {
     return null;
   }

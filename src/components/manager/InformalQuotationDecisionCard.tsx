@@ -128,7 +128,7 @@ export function InformalQuotationDecisionCard({
   const pending = quotations.filter((quotation) => quotation.status === "PENDING");
   const decided = quotations.filter((quotation) => quotation.status !== "PENDING").slice(0, 3);
 
-  async function decide(id: string, status: "APPROVED" | "REJECTED") {
+  async function decide(id: string, status: "APPROVED" | "REJECTED" | "CORRECTION_REQUESTED") {
     setBusyId(id);
     setError("");
     const response = await fetch(`/api/informal-quotations/${id}`, {
@@ -136,7 +136,7 @@ export function InformalQuotationDecisionCard({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status,
-        decisionNote: notes[id] || `${status === "APPROVED" ? "Approved" : "Rejected"} from informal quotation document review.`,
+        decisionNote: notes[id] || `${status === "APPROVED" ? "Approved" : status === "REJECTED" ? "Rejected" : "Correction requested"} from informal quotation document review.`,
       }),
     });
 
@@ -190,6 +190,14 @@ export function InformalQuotationDecisionCard({
                   onClick={() => void decide(quotation.id, "REJECTED")}
                 >
                   Reject
+                </button>
+                <button
+                  className="button-ghost"
+                  type="button"
+                  disabled={busyId === quotation.id || isRefreshing}
+                  onClick={() => void decide(quotation.id, "CORRECTION_REQUESTED")}
+                >
+                  Request correction
                 </button>
               </div>
             </div>

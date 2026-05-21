@@ -59,6 +59,12 @@ export async function POST(request: Request) {
 
       // 1. Reduce remaining quantity
       order.remainingQuantity -= dispatchedQuantityCum;
+      order.fulfillmentStatus =
+        order.remainingQuantity <= 0
+          ? "FULLY_FULFILLED"
+          : order.remainingQuantity < (order.orderQuantity ?? order.quantity)
+            ? "PARTIALLY_FULFILLED"
+            : "OPEN";
 
       // 2. Change vehicle status
       vehicle.status = "ACTIVE";

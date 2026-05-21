@@ -50,6 +50,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
       // Add the returned amount back to the order's remaining quantity
       order.remainingQuantity += returnedQuantityCum;
+      order.fulfillmentStatus =
+        order.remainingQuantity <= 0
+          ? "FULLY_FULFILLED"
+          : order.remainingQuantity < (order.orderQuantity ?? order.quantity)
+            ? "PARTIALLY_FULFILLED"
+            : "OPEN";
 
       // Audit Log
       draft.auditLogs.unshift({

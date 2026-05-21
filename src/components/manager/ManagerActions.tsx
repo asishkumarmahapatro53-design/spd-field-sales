@@ -30,6 +30,7 @@ export function ManagerActions({
     <div className="panel-grid">
       <VerificationCard verificationQueue={verificationQueue} />
       <ApprovalDecisionCard approvals={approvals} agents={agents} leads={leads} />
+      <LeadClosureDecisionCard leads={leads} agents={agents} />
       <TargetCard agents={agents} targets={targets} />
       <HelpResolutionCard helpRequests={helpRequests} />
       <TaskAssignmentCard agents={agents} />
@@ -83,6 +84,12 @@ export function VerificationCard({ verificationQueue }: { verificationQueue: Odo
                 </a>
               </div>
               <p>{reading.verificationNote ?? "No note"}</p>
+              <div className="row-meta">
+                <span>Agent {reading.agentEnteredReading ?? "N/A"}</span>
+                <span>OCR {reading.ocrValue ?? "N/A"}</span>
+                <span>{reading.reviewReason ?? "Review required"}</span>
+              </div>
+              {reading.continuityNote ? <p className="hint">{reading.continuityNote}</p> : null}
               <div className="three-grid">
                 <div className="field">
                   <label htmlFor={`manualValue-${reading.id}`}>Manual value</label>
@@ -313,6 +320,106 @@ export function CreditOverrideDecisionCard({ requests }: { requests: SalesOrderR
           ))
         ) : (
           <div className="success-box">No credit requests are waiting for exception review.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function LeadClosureDecisionCard({ leads, agents }: { leads: Lead[]; agents: User[] }) {
+  const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
+  const pendingLeads = leads.filter((lead) => lead.closureStatus === "PENDING_MANAGER_APPROVAL");
+
+  async function decide(lead: Lead, action: "APPROVE" | "REJECT", formData: FormData) {
+    setBusyId(lead.id);
+    setError("");
+    const note = `${formData.get(`closureNote-${lead.id}`) ?? ""}`.trim();
+    const response = await fetch(`/api/leads/${lead.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        action === "APPROVE"
+          ? {
+              action: "close",
+              reason: lead.closureReason ?? "DEAD",
+              remarks: note || lead.closureRemarks || "Manager approved lead closure.",
+            }
+          : {
+              action: "rejectClosure",
+              reason: note || "Manager rejected lead closure request.",
+            },
+      ),
+    });
+
+    if (!response.ok) {
+      setError(await parseApiError(response));
+      setBusyId("");
+      return;
+    }
+
+    window.location.reload();
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <div>
+          <h2>Lead Closure Requests</h2>
+          <p className="panel-copy">Sales agents can request dead/lost closure, but manager approval is required before the lead and sites close.</p>
+        </div>
+        <span className="status-badge status-pending">{pendingLeads.length} pending</span>
+      </div>
+      {error ? <div className="error-box">{error}</div> : null}
+      <div className="data-list">
+        {pendingLeads.length ? (
+          pendingLeads.map((lead) => {
+            const requestedBy = agents.find((agent) => agent.id === lead.closureRequestedBy);
+            return (
+              <form key={lead.id} className="data-row" action={() => undefined}>
+                <div className="panel-header">
+                  <h4>{lead.siteName}</h4>
+                  <span className="status-badge status-pending">{lead.closureReason ?? "Closure requested"}</span>
+                </div>
+                <p>{lead.closureRemarks ?? "No agent remark captured."}</p>
+                <div className="row-meta">
+                  <span>{requestedBy?.name ?? lead.closureRequestedBy ?? "Sales agent"}</span>
+                  <span>{toIndiaTimeLabel(lead.closureRequestedAt ?? null)}</span>
+                  <span>{lead.siteAddress}</span>
+                </div>
+                <div className="field">
+                  <label htmlFor={`closureNote-${lead.id}`}>Manager note</label>
+                  <input id={`closureNote-${lead.id}`} name={`closureNote-${lead.id}`} required />
+                </div>
+                <div className="button-row">
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busyId === lead.id}
+                    onClick={(event) => {
+                      const formData = new FormData(event.currentTarget.form as HTMLFormElement);
+                      void decide(lead, "APPROVE", formData);
+                    }}
+                  >
+                    {busyId === lead.id ? "Saving..." : "Approve closure"}
+                  </button>
+                  <button
+                    className="button-danger"
+                    type="button"
+                    disabled={busyId === lead.id}
+                    onClick={(event) => {
+                      const formData = new FormData(event.currentTarget.form as HTMLFormElement);
+                      void decide(lead, "REJECT", formData);
+                    }}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </form>
+            );
+          })
+        ) : (
+          <div className="success-box">No lead closure requests are waiting.</div>
         )}
       </div>
     </section>

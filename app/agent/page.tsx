@@ -225,6 +225,9 @@ export default async function AgentPage() {
               <span className="agent-filter-lines" aria-hidden="true" />
             </div>
             <AgentLeadFocus leads={data.leads} maxItems={3} />
+            <Link className="agent-wide-button" href="/agent/map">
+              Map View
+            </Link>
             <Link className="agent-wide-button" href="/agent/leads">
               View All Leads
             </Link>

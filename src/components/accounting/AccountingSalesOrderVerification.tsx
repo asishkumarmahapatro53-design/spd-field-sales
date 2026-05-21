@@ -155,17 +155,20 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
     refreshWithMessage("Customer ledger created. Request moved to Create Sales Order section.");
   }
 
-  async function rejectLedger(id: string) {
+  async function rejectLedger(event: React.FormEvent<HTMLFormElement>, id: string) {
+    event.preventDefault();
     setBusyId(id);
     setMessage("");
     setError("");
+    const formData = new FormData(event.currentTarget);
 
     const response = await fetch(`/api/sales-order-requests/${id}/finance-review`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status: "FINANCE_REJECTED",
-        note: "Accounts rejected the ledger request due to missing or invalid documents.",
+        financeRejectionReason: formData.get("financeRejectionReason"),
+        note: formData.get("financeRejectionNote"),
       }),
     });
 
@@ -421,9 +424,34 @@ export function AccountingSalesOrderVerification({ requests }: { requests: Sales
                     {busyId === request.id ? "Saving..." : "Create ledger"}
                   </button>
                 </form>
-                <button className="button-danger" type="button" disabled={busyId === request.id || isRefreshing} onClick={() => void rejectLedger(request.id)}>
-                  {busyId === request.id ? "Saving..." : "Reject"}
-                </button>
+                <form className="form-grid" onSubmit={(event) => void rejectLedger(event, request.id)}>
+                  <div className="three-grid">
+                    <div className="field">
+                      <label htmlFor={`finance-reason-${request.id}`}>Rejection reason</label>
+                      <select id={`finance-reason-${request.id}`} name="financeRejectionReason" defaultValue="INCOMPLETE_DETAILS" required>
+                        <option value="PO_MISSING">PO missing</option>
+                        <option value="GST_INVALID">GST invalid</option>
+                        <option value="CREDIT_EXCEEDED">Credit exceeded</option>
+                        <option value="PAYMENT_NOT_RECEIVED">Payment not received</option>
+                        <option value="DUPLICATE_REQUEST">Duplicate request</option>
+                        <option value="INCOMPLETE_DETAILS">Incomplete details</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label htmlFor={`finance-note-${request.id}`}>Finance note</label>
+                      <input
+                        id={`finance-note-${request.id}`}
+                        name="financeRejectionNote"
+                        required
+                        defaultValue="Accounts rejected the ledger request due to missing or invalid documents."
+                      />
+                    </div>
+                  </div>
+                  <button className="button-danger" type="submit" disabled={busyId === request.id || isRefreshing}>
+                    {busyId === request.id ? "Saving..." : "Reject"}
+                  </button>
+                </form>
               </div>
             </article>
           ))

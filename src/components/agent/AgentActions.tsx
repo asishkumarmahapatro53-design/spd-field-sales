@@ -190,6 +190,7 @@ export function OdometerUploadCard({
   const [busy, setBusy] = useState(false);
   const [pendingReading, setPendingReading] = useState<OdometerReading | null>(null);
   const [readingType, setReadingType] = useState<"START" | "END" | "">("");
+  const [agentEnteredReading, setAgentEnteredReading] = useState("");
   /** The watermarked+compressed File from GpsCamera */
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   /** GPS from GpsCamera (already embedded in photo watermark, also sent to API separately) */
@@ -217,6 +218,12 @@ export function OdometerUploadCard({
       return;
     }
 
+    const manualValue = Number(agentEnteredReading);
+    if (!Number.isFinite(manualValue) || manualValue < 0) {
+      setError("Enter the odometer reading shown in the photo before upload.");
+      return;
+    }
+
     if (capturedFile.size > ODOMETER_UPLOAD_HARD_LIMIT_BYTES) {
       setError(
         `This photo is still ${(capturedFile.size / 1024).toFixed(0)} KB after compression. Retake it closer to the odometer so the upload stays under the mobile limit.`,
@@ -237,6 +244,8 @@ export function OdometerUploadCard({
           photoName: upload.originalFileName || capturedFile.name,
           mimeType: capturedFile.type || "image/webp",
           sizeBytes: capturedFile.size,
+          agentEnteredReading: manualValue,
+          batchConfirmation: "I confirm these readings belong to the captured dates shown above.",
           lat: capturedCoords ? String(capturedCoords.lat) : "",
           lng: capturedCoords ? String(capturedCoords.lng) : "",
         }),
@@ -251,6 +260,7 @@ export function OdometerUploadCard({
       setCapturedFile(null);
       setCapturedCoords(null);
       setReadingType("");
+      setAgentEnteredReading("");
 
       if (payload.reading?.status === "AWAITING_CONFIRMATION") {
         setPendingReading(payload.reading);
@@ -268,7 +278,7 @@ export function OdometerUploadCard({
       setPendingReading(null);
       setMessage(
         payload.reading?.verificationNote ||
-          "AI confidence is low or data was missing. The photo was sent to manager verification and is also visible in your Reading History for cross-check.",
+          "The photo was accepted. If any safeguard failed, it has been routed to manager verification and stays visible in Reading History.",
       );
       startTransition(() => router.refresh());
     } catch (error) {
@@ -334,6 +344,22 @@ export function OdometerUploadCard({
           <option value="START">Start reading</option>
           <option value="END">End reading</option>
         </select>
+      </div>
+
+      <div className="field">
+        <label htmlFor="agentEnteredReading">Reading shown in photo</label>
+        <input
+          id="agentEnteredReading"
+          name="agentEnteredReading"
+          type="number"
+          min="0"
+          step="0.1"
+          value={agentEnteredReading}
+          onChange={(event) => setAgentEnteredReading(event.target.value)}
+          placeholder="Enter km reading manually"
+          required
+        />
+        <span className="hint">The app compares this value with OCR and auto-approves only within 1 km.</span>
       </div>
 
       {/* Step 2: Smart GPS Camera, rear camera, auto-watermark */}

@@ -38,6 +38,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         const order = draft.salesOrderRequests.find((entry) => entry.id === record.orderId);
         if (order) {
           order.remainingQuantity += billableQuantityBeforeDecision;
+          order.fulfillmentStatus =
+            order.remainingQuantity <= 0
+              ? "FULLY_FULFILLED"
+              : order.remainingQuantity < (order.orderQuantity ?? order.quantity)
+                ? "PARTIALLY_FULFILLED"
+                : "OPEN";
         }
         record.returnedQuantityCum = record.dispatchedQuantityCum;
         record.finalSuppliedCum = 0;

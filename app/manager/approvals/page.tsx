@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { MetricCard } from "@/components/MetricCard";
 import { InformalQuotationDecisionCard } from "@/components/manager/InformalQuotationDecisionCard";
-import { ApprovalDecisionCard, CreditOverrideDecisionCard, PoPdcExceptionDecisionCard, ReimbursementVerificationCard } from "@/components/manager/ManagerActions";
+import { ApprovalDecisionCard, CreditOverrideDecisionCard, LeadClosureDecisionCard, PoPdcExceptionDecisionCard, ReimbursementVerificationCard } from "@/components/manager/ManagerActions";
 import { ManagerSectionNav } from "@/components/manager/ManagerSectionNav";
 import { requireUser } from "@/lib/auth";
 import { getManagerDashboardData } from "@/lib/repository";
@@ -13,6 +13,7 @@ export default async function ManagerApprovalsPage() {
   const pendingInformalQuotations = data.informalQuotationRequests.filter((entry) => entry.status === "PENDING");
   const pendingReimbursementClaims = data.reimbursementClaims.filter((entry) => entry.status === "CLAIM_REQUESTED" || entry.status === "REQUESTED");
   const pendingPoPdcExceptions = data.salesOrderRequests.filter((entry) => entry.poPdcExceptionStatus === "REQUESTED");
+  const pendingLeadClosures = data.leads.filter((entry) => entry.closureStatus === "PENDING_MANAGER_APPROVAL");
   const approved =
     data.approvals.filter((entry) => entry.status === "APPROVED").length +
     data.informalQuotationRequests.filter((entry) => entry.status === "APPROVED").length;
@@ -37,6 +38,7 @@ export default async function ManagerApprovalsPage() {
         <MetricCard label="Rejected" value={rejected} note="Formal and informal requests declined" />
         <MetricCard label="Claim verification" value={pendingReimbursementClaims.length} note="Reimbursements waiting for manager" />
         <MetricCard label="PO/PDC exceptions" value={pendingPoPdcExceptions.length} note="Ledger exceptions waiting" />
+        <MetricCard label="Lead closure" value={pendingLeadClosures.length} note="Dead/lost requests waiting" />
       </section>
 
       <section className="mt-24">
@@ -49,6 +51,10 @@ export default async function ManagerApprovalsPage() {
 
       <section className="mt-24">
         <CreditOverrideDecisionCard requests={data.salesOrderRequests} />
+      </section>
+
+      <section className="mt-24">
+        <LeadClosureDecisionCard leads={data.leads} agents={data.agents} />
       </section>
 
       <section className="mt-24">

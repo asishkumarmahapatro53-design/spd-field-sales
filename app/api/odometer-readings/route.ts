@@ -34,6 +34,8 @@ async function parseFormOdometerPayload(request: Request) {
   return {
     type,
     file: photo,
+    agentEnteredReading: requireOdometerManualValue(formData.get("agentEnteredReading")),
+    batchConfirmation: `${formData.get("batchConfirmation") ?? ""}`.trim() || null,
     latLng: parseLatLng({
       lat: formData.get("lat"),
       lng: formData.get("lng"),
@@ -49,6 +51,8 @@ async function parseJsonOdometerPayload(request: Request, userId: string) {
     mimeType?: string;
     s3Key?: string;
     sizeBytes?: number;
+    agentEnteredReading?: string | number;
+    batchConfirmation?: string;
     lat?: string;
     lng?: string;
   };
@@ -68,6 +72,8 @@ async function parseJsonOdometerPayload(request: Request, userId: string) {
         mimeType: payload.mimeType?.trim() || null,
         sizeBytes: Number.isFinite(payload.sizeBytes) ? Number(payload.sizeBytes) : null,
       },
+      agentEnteredReading: requireOdometerManualValue(payload.agentEnteredReading),
+      batchConfirmation: `${payload.batchConfirmation ?? ""}`.trim() || null,
       latLng,
     };
   }
@@ -93,8 +99,20 @@ async function parseJsonOdometerPayload(request: Request, userId: string) {
   return {
     type,
     file,
+    agentEnteredReading: requireOdometerManualValue(payload.agentEnteredReading),
+    batchConfirmation: `${payload.batchConfirmation ?? ""}`.trim() || null,
     latLng,
   };
+}
+
+function requireOdometerManualValue(value: unknown) {
+  const manualValue = Number(`${value ?? ""}`);
+
+  if (!Number.isFinite(manualValue) || manualValue < 0) {
+    throw new ApiError(400, "Agent-entered odometer reading is required and must be a non-negative number.");
+  }
+
+  return Math.round(manualValue * 10) / 10;
 }
 
 function sanitizeFileName(value: string | null | undefined) {

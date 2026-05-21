@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import * as XLSX from "xlsx";
 import {
   buildSalesOrderPreviewHash,
@@ -29,6 +29,7 @@ import {
   shouldCreateAdvanceReceiptCredit,
 } from "@/lib/customer-ledger";
 import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
+import { buildVerificationMessage, placeCallVerification, sendWhatsappVerification } from "@/lib/contact-verification";
 import { readCollection, readCollectionByFieldValues, readDatabase, updateDatabase } from "@/lib/db";
 import { sendGmail } from "@/lib/gmail-smtp";
 import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
@@ -42,7 +43,7 @@ import {
   upsertOdooPartnerForSalesOrder,
 } from "@/lib/odoo";
 import { ocrService } from "@/lib/ocr";
-import { getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
+import { distanceMeters, getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import { saveGeneratedBuffer } from "@/lib/storage";
 import type {
   AccountingDashboardData,
@@ -53,6 +54,8 @@ import type {
   BatcherDashboardData,
   Database,
   DocumentTemplateType,
+  ContactVerificationEvent,
+  ContactVerificationChannel,
   ExpectedSupplyWindow,
   CreditRiskCategory,
   LedgerDecisionStatus,
@@ -67,9 +70,14 @@ import type {
   LeadSite,
   LeadStage,
   ManagerDashboardData,
+  MapPinColor,
   MixDesign,
   MixDesignType,
   OdometerReading,
+  OdometerContinuityStatus,
+  OdometerDaySummary,
+  OdometerDiscardReason,
+  OdometerLockStatus,
   PaymentTerms,
   PaymentType,
   PaymentVerificationMode,
@@ -78,8 +86,10 @@ import type {
   ReimbursementSummary,
   SalesOrderRequest,
   SiteVisit,
+  SiteMapMarker,
   SiteLocationVerificationStatus,
   StakeholderContact,
+  StakeholderMaster,
   Target,
   Task,
   User,
@@ -94,6 +104,26 @@ const ACCEPTED_OCR_READING_KINDS = new Set(["ODO", "TOTAL", "TRIP"]);
 const MAX_ODOMETER_STORED_BYTES = 2 * 1024 * 1024;
 const MAX_SITE_VISIT_STORED_BYTES = 5 * 1024 * 1024;
 const MAX_SITE_VISIT_VOICE_STORED_BYTES = 10 * 1024 * 1024;
+const MAX_AUTO_ODOMETER_DIFF_KM = 1;
+const MAX_REASONABLE_DAY_DISTANCE_KM = 250;
+const NEARBY_SITE_STRONG_MATCH_METERS = 75;
+const NEARBY_SITE_MODERATE_MATCH_METERS = 200;
+const MIN_QUOTATION_VALID_DAYS = 30;
+
+const INVALID_PHONE_PATTERNS = new Set([
+  "0000000000",
+  "1111111111",
+  "2222222222",
+  "3333333333",
+  "4444444444",
+  "5555555555",
+  "6666666666",
+  "7777777777",
+  "8888888888",
+  "9999999999",
+  "1234567890",
+  "0123456789",
+]);
 
 function ensureAutoMixDesignForSalesOrder(database: Database, request: SalesOrderRequest, actor: User) {
   const existingDesign = findMixDesignForOrder(database.mixDesigns ?? [], request);
@@ -430,7 +460,7 @@ function getReadingStatus(confirmedStart: number | null, confirmedEnd: number | 
 }
 
 function getLastPaidThroughDate(database: Database, agentId: string) {
-  return database.reimbursementClaims
+  const paidThroughClaimDate = database.reimbursementClaims
     .filter((claim) => claim.agentId === agentId && claim.status === "PAID")
     .reduce<string | null>((latestDate, claim) => {
       if (!latestDate || claim.periodEnd > latestDate) {
@@ -439,6 +469,13 @@ function getLastPaidThroughDate(database: Database, agentId: string) {
 
       return latestDate;
     }, null);
+  const storedClosedDate = database.users.find((entry) => entry.id === agentId)?.lastReimbursementClosedDate ?? null;
+
+  if (paidThroughClaimDate && storedClosedDate) {
+    return paidThroughClaimDate > storedClosedDate ? paidThroughClaimDate : storedClosedDate;
+  }
+
+  return paidThroughClaimDate ?? storedClosedDate;
 }
 
 function getClaimIdForSession(database: Database, sessionId: string) {
@@ -474,7 +511,7 @@ export function computeReimbursementSummaries(database: Database, userId?: strin
     .map<ReimbursementSummary>((session) => {
       const user = findUser(database, session.userId);
       const readings = database.odometerReadings
-        .filter((entry) => entry.sessionId === session.id)
+        .filter((entry) => entry.sessionId === session.id && entry.status !== "DISCARDED" && entry.isActiveReading !== false)
         .sort((left, right) => compareIsoAsc(left.capturedAt, right.capturedAt));
       const visits = database.siteVisits
         .filter((entry) => entry.sessionId === session.id)
@@ -835,6 +872,17 @@ export async function recordReimbursementClaimPayment(
     claim.paidAt = now;
     claim.paidBy = user.id;
     claim.note = remarks;
+    const agent = database.users.find((entry) => entry.id === claim.agentId);
+    if (agent && (!agent.lastReimbursementClosedDate || claim.periodEnd > agent.lastReimbursementClosedDate)) {
+      agent.lastReimbursementClosedDate = claim.periodEnd;
+    }
+    claim.lineItems.forEach((lineItem) => {
+      database.odometerReadings
+        .filter((reading) => reading.sessionId === lineItem.sessionId)
+        .forEach((reading) => {
+          reading.lockStatus = "PAID_LOCKED";
+        });
+    });
     logAudit(database, user, "ReimbursementClaim", claim.id, "PAID", `Paid reimbursement claim for Rs.${paidAmount}. ${remarks}`);
     return claim;
   });
@@ -901,17 +949,46 @@ function getClaimBlockingReadingDate(database: Database, agentId: string, dateKe
   });
 }
 
-function assertReadingDateIsClaimable(database: Database, agentId: string, dateKey: string) {
+function getOdometerLockStatus(database: Database, agentId: string, dateKey: string): {
+  status: OdometerLockStatus;
+  claimId: string | null;
+  message: string | null;
+} {
   const lastPaidThroughDate = getLastPaidThroughDate(database, agentId);
 
   if (lastPaidThroughDate && dateKey <= lastPaidThroughDate) {
-    throw new Error(`This photo is dated ${dateKey}, which is already covered by the paid claim through ${lastPaidThroughDate}.`);
+    return {
+      status: "PAID_LOCKED",
+      claimId: null,
+      message: `This date is already covered by paid reimbursement through ${lastPaidThroughDate}. Original paid claims cannot be modified directly.`,
+    };
   }
 
   const blockingClaim = getClaimBlockingReadingDate(database, agentId, dateKey);
-
   if (blockingClaim) {
-    throw new Error(`This photo is dated ${dateKey}, which is already inside claim ${blockingClaim.id.slice(0, 8)}.`);
+    return {
+      status: "CLAIMED",
+      claimId: blockingClaim.id,
+      message: "This date is already claimed or closed for reimbursement. New odometer readings cannot be uploaded directly.",
+    };
+  }
+
+  return { status: "OPEN", claimId: null, message: null };
+}
+
+function assertOdometerDateUnlocked(database: Database, agentId: string, dateKey: string) {
+  const lock = getOdometerLockStatus(database, agentId, dateKey);
+
+  if (lock.status !== "OPEN" && lock.status !== "REOPENED_FOR_CORRECTION") {
+    throw new Error(lock.message ?? "This odometer date is locked.");
+  }
+}
+
+function assertReadingDateIsClaimable(database: Database, agentId: string, dateKey: string) {
+  const lock = getOdometerLockStatus(database, agentId, dateKey);
+
+  if (lock.status !== "OPEN") {
+    throw new Error(lock.message ?? `This photo is dated ${dateKey}, which is already locked for reimbursement.`);
   }
 }
 
@@ -1025,6 +1102,8 @@ function getOrCreateSiteVisitSession(
 type OdometerReadingInput = {
   type: ReadingType;
   latLng: LatLng | null;
+  agentEnteredReading: number;
+  batchConfirmation?: string | null;
 } & (
   | {
       file: File;
@@ -1070,6 +1149,20 @@ export async function createOdometerReading(user: User, input: OdometerReadingIn
     throw new Error("The dashboard photo timestamp is in the future. Upload a valid dashboard photo.");
   }
 
+  // MOD-004: Compute image hash for duplicate detection
+  const { createHash } = await import("node:crypto");
+  const imageHash = createHash("sha256").update(fileBuffer).digest("hex");
+
+  // MOD-002: Extract GPS watermark info from OCR metadata
+  const gpsWatermarkText = (ocr as any).gpsWatermark ?? null;
+  const gpsCapturedDate = hasExtractedTimestamp ? toDateKey(capturedAt) : null;
+  const gpsCapturedLocation = (ocr as any).gpsLocation ?? null;
+  const agentEnteredReading = Math.round(input.agentEnteredReading * 10) / 10;
+
+  if (!Number.isFinite(agentEnteredReading) || agentEnteredReading < 0) {
+    throw new Error("Agent-entered odometer reading is required.");
+  }
+
   return updateDatabase((database) => {
     const readingDateKey = toDateKey(capturedAt);
     assertReadingDateIsClaimable(database, user.id, readingDateKey);
@@ -1082,19 +1175,72 @@ export async function createOdometerReading(user: User, input: OdometerReadingIn
       input.type,
       hasExtractedTimestamp,
     );
+
+    // MOD-004: Check for duplicate images (same hash already uploaded)
+    const duplicateReading = database.odometerReadings.find(
+      (entry) => entry.imageHash === imageHash && entry.status !== "DISCARDED" && entry.isActiveReading !== false,
+    );
+
+    // MOD-005: Block accidental second START/END for the same captured workday.
+    const existingActiveReading = database.odometerReadings.find(
+      (entry) =>
+        entry.sessionId === session.id &&
+        entry.type === input.type &&
+        entry.isActiveReading !== false &&
+        entry.status !== "DISCARDED",
+    );
+    if (existingActiveReading) {
+      throw new Error(
+        `${input.type} reading already exists for ${readingDateKey}. Discard the incorrect pending reading before final submission, or ask manager to reopen/correct the locked reading.`,
+      );
+    }
+
     const hasRecognizedMeterReading = ocr.value !== null && ACCEPTED_OCR_READING_KINDS.has(ocr.kind);
     const hasReliableReading = hasRecognizedMeterReading && ocr.confidence >= OCR_ACCEPTANCE_CONFIDENCE;
+    const readingDifference = ocr.value !== null ? Math.abs(agentEnteredReading - ocr.value) : null;
+    const isWithinAgentOcrTolerance = readingDifference !== null && readingDifference <= MAX_AUTO_ODOMETER_DIFF_KM;
     const confidencePercent = Math.round(ocr.confidence * 100);
     const meterLabel = ocr.kind === "UNKNOWN" ? "meter" : ocr.kind;
-    const verificationNote = hasReliableReading
-      ? hasExtractedTimestamp
-        ? `${ocr.note} Detected ${meterLabel} reading. Dashboard timestamp mapped to ${readingDateKey}.`
-        : `${ocr.note} Detected ${meterLabel} reading. No dashboard timestamp was extracted; used active workday date.`
-      : `${hasRecognizedMeterReading ? `AI found a ${meterLabel} value, but confidence is low (${confidencePercent}%).` : "AI could not find a readable ODO, TOTAL, TRIP, or rolling odometer value."} Sent to manager verification and kept visible in the agent reading history for agent/driver cross-check. ${ocr.note} ${
-          hasExtractedTimestamp
-            ? `Dashboard timestamp mapped to ${readingDateKey}.`
-            : "No dashboard timestamp was extracted; manager should verify date and reading from the photo."
-        }`;
+
+    // MOD-011: Determine watermark status
+    const hasGpsWatermark = Boolean(gpsWatermarkText || gpsCapturedDate || input.latLng);
+    const watermarkStatus = hasGpsWatermark
+      ? ("PRESENT" as const)
+      : gpsWatermarkText === null && !input.latLng
+        ? ("MISSING" as const)
+        : ("UNREADABLE" as const);
+
+    // MOD-012: Continuity check against previous day's END reading
+    const continuity = checkOdometerContinuity(database, user.id, readingDateKey, input.type, agentEnteredReading);
+
+    // MOD-013: Determine upload source
+    const todayKey = toDateKey(nowIso());
+    const uploadSource = readingDateKey !== todayKey ? "PAST" : "LIVE";
+    const reviewReasons = [
+      !hasRecognizedMeterReading ? "OCR could not read an odometer value" : null,
+      hasRecognizedMeterReading && !hasReliableReading ? `Low OCR confidence (${confidencePercent}%)` : null,
+      readingDifference !== null && readingDifference > MAX_AUTO_ODOMETER_DIFF_KM
+        ? `Agent/OCR mismatch ${readingDifference.toFixed(1)} km`
+        : null,
+      !hasExtractedTimestamp && !input.latLng ? "Captured date/GPS watermark missing" : null,
+      watermarkStatus !== "PRESENT" ? `GPS watermark ${watermarkStatus.toLowerCase()}` : null,
+      duplicateReading ? `Duplicate image of reading ${duplicateReading.id.slice(0, 8)}` : null,
+      continuity.status !== "OK" ? `Odometer continuity ${continuity.status}` : null,
+    ].filter((reason): reason is string => Boolean(reason));
+    const requiresManagerReview = reviewReasons.length > 0;
+    const verificationNote = requiresManagerReview
+      ? [
+          "Manager review required.",
+          `Agent entered ${agentEnteredReading}.`,
+          ocr.value === null ? "OCR value was not found." : `OCR read ${ocr.value}; difference ${readingDifference?.toFixed(1) ?? "N/A"} km.`,
+          `${ocr.note} Dashboard date mapped to ${readingDateKey}.`,
+          ...reviewReasons,
+        ].join(" ")
+      : [
+          `Auto-approved agent-entered reading ${agentEnteredReading}.`,
+          `OCR read ${ocr.value}; difference ${readingDifference?.toFixed(1) ?? "0.0"} km.`,
+          `${ocr.note} Dashboard timestamp mapped to ${readingDateKey}.`,
+        ].join(" ");
 
     const reading: OdometerReading = {
       id: randomUUID(),
@@ -1105,11 +1251,60 @@ export async function createOdometerReading(user: User, input: OdometerReadingIn
       capturedAt,
       capturedLatLng: input.latLng,
       ocrValue: ocr.value,
-      finalValue: hasReliableReading ? ocr.value : null,
+      finalValue: requiresManagerReview ? null : agentEnteredReading,
       ocrConfidence: ocr.confidence,
-      status: hasReliableReading ? "AWAITING_CONFIRMATION" : "MANUAL_REVIEW_REQUIRED",
+      status: requiresManagerReview ? "MANUAL_REVIEW_REQUIRED" : "CONFIRMED",
       verifiedBy: null,
       verificationNote,
+      // MOD-001: Agent manual reading / OCR comparison
+      agentEnteredReading,
+      readingDifference,
+      managerFinalReading: null,
+      // MOD-001: Discard flow
+      discardedAt: null,
+      discardedBy: null,
+      discardReason: null,
+      discardNote: null,
+      replacedByReadingId: null,
+      replacesReadingId: null,
+      // MOD-002: GPS watermark metadata
+      gpsWatermarkText,
+      gpsCapturedDate,
+      gpsCapturedLocation,
+      gpsAccuracy: null,
+      // MOD-003: Upload metadata
+      uploadedBy: user.id,
+      uploadDateTime: nowIso(),
+      uploadSource,
+      fileSizeBytes: fileBuffer.length,
+      // MOD-004: Duplicate image detection
+      imageHash,
+      duplicateOfReadingId: duplicateReading?.id ?? null,
+      duplicateWarningAcknowledgedBy: null,
+      duplicateWarningAcknowledgedAt: null,
+      // MOD-005: Active reading flag
+      isActiveReading: true,
+      // MOD-010: Correction versioning
+      correctionVersion: 1,
+      previousReadingValue: null,
+      correctionReason: null,
+      correctionApprovedBy: null,
+      correctionApprovedAt: null,
+      // MOD-011: Watermark status
+      hasGpsWatermark,
+      watermarkStatus,
+      // MOD-012: Continuity
+      continuityStatus: continuity.status,
+      continuityNote: continuity.note,
+      // MOD-013: Manager review
+      reviewReason: reviewReasons.join("; ") || null,
+      managerReviewRequiredAt: requiresManagerReview ? nowIso() : null,
+      managerReviewedAt: null,
+      managerRemark: null,
+      lockStatus: "OPEN",
+      reopenedForCorrectionBy: null,
+      reopenedForCorrectionAt: null,
+      reopenedForCorrectionReason: null,
     };
 
     database.odometerReadings.unshift(reading);
@@ -1119,7 +1314,7 @@ export async function createOdometerReading(user: User, input: OdometerReadingIn
       "OdometerReading",
       reading.id,
       "CREATE",
-      `Uploaded ${input.type.toLowerCase()} odometer reading with OCR confidence ${ocr.confidence}.`,
+      `Uploaded ${input.type.toLowerCase()} odometer reading. Agent ${agentEnteredReading}, OCR ${ocr.value ?? "N/A"}, confidence ${ocr.confidence}.${requiresManagerReview ? ` Manager review: ${reviewReasons.join("; ")}.` : " Auto-approved within tolerance."}`,
     );
 
     return reading;
@@ -1173,9 +1368,21 @@ export async function confirmOdometerReading(user: User, readingId: string) {
       throw new Error("You can only confirm your own readings.");
     }
 
+    assertOdometerDateUnlocked(database, user.id, toDateKey(reading.capturedAt));
+
+    if (reading.status !== "AWAITING_CONFIRMATION") {
+      throw new Error("Only readings waiting for agent confirmation can be confirmed.");
+    }
+
+    const finalValue = reading.agentEnteredReading ?? reading.ocrValue;
+    if (finalValue === null || finalValue === undefined || !Number.isFinite(finalValue)) {
+      throw new Error("A manual or OCR reading value is required before confirmation.");
+    }
+
     reading.status = "CONFIRMED";
-    reading.finalValue = reading.ocrValue;
-    logAudit(database, user, "OdometerReading", reading.id, "CONFIRM", "Agent confirmed OCR result.");
+    reading.finalValue = finalValue;
+    reading.lockStatus = "OPEN";
+    logAudit(database, user, "OdometerReading", reading.id, "CONFIRM", `Agent confirmed final reading ${finalValue}.`);
     return reading;
   });
 }
@@ -1195,12 +1402,921 @@ export async function rejectOdometerReading(user: User, readingId: string, note:
       throw new Error("You can only reject your own readings.");
     }
 
+    assertOdometerDateUnlocked(database, user.id, toDateKey(reading.capturedAt));
+
+    if (reading.status !== "AWAITING_CONFIRMATION") {
+      throw new Error("Only readings waiting for agent confirmation can be sent for review.");
+    }
+
     reading.status = "MANUAL_REVIEW_REQUIRED";
     reading.finalValue = null;
     reading.verificationNote = note || "Agent rejected OCR result.";
     logAudit(database, user, "OdometerReading", reading.id, "REJECT", reading.verificationNote);
     return reading;
   });
+}
+
+// MOD-012/014: Continuity check — previous END <= current START <= current END.
+function checkOdometerContinuity(
+  database: Database,
+  userId: string,
+  dateKey: string,
+  readingType: ReadingType,
+  proposedValue: number | null,
+): { status: OdometerContinuityStatus; note: string | null } {
+  if (proposedValue === null) {
+    return { status: "OK", note: null };
+  }
+
+  if (readingType === "END") {
+    const sameDaySessionIds = database.workdaySessions
+      .filter((session) => session.userId === userId && session.date === dateKey)
+      .map((session) => session.id);
+    const startReading = [...database.odometerReadings]
+      .filter(
+        (entry) =>
+          sameDaySessionIds.includes(entry.sessionId) &&
+          entry.type === "START" &&
+          entry.finalValue !== null &&
+          entry.isActiveReading !== false &&
+          entry.status !== "DISCARDED",
+      )
+      .sort((left, right) => compareIsoAsc(right.capturedAt, left.capturedAt))[0];
+
+    if (startReading?.finalValue !== null && startReading?.finalValue !== undefined) {
+      const dayDistance = proposedValue - startReading.finalValue;
+      if (dayDistance < 0) {
+        return {
+          status: "REVERSAL",
+          note: `END reading (${proposedValue}) is less than START reading (${startReading.finalValue}) for ${dateKey}. Negative same-day distance is not allowed.`,
+        };
+      }
+      if (dayDistance > MAX_REASONABLE_DAY_DISTANCE_KM) {
+        return {
+          status: "GAP",
+          note: `Same-day distance ${dayDistance} km is above the configured normal field threshold of ${MAX_REASONABLE_DAY_DISTANCE_KM} km. Manager review required.`,
+        };
+      }
+    }
+    return { status: "OK", note: null };
+  }
+
+  const allSessions = database.workdaySessions
+    .filter((session) => session.userId === userId && session.date < dateKey)
+    .sort((left, right) => right.date.localeCompare(left.date));
+
+  if (!allSessions.length) {
+    return { status: "OK", note: null };
+  }
+
+  const previousSession = allSessions[0];
+  if (!previousSession) {
+    return { status: "OK", note: null };
+  }
+
+  const previousEndReading = [...database.odometerReadings]
+    .filter(
+      (entry) =>
+        entry.sessionId === previousSession.id &&
+        entry.type === "END" &&
+        entry.finalValue !== null &&
+        entry.isActiveReading !== false &&
+        entry.status !== "DISCARDED",
+    )
+    .sort((left, right) => compareIsoAsc(right.capturedAt, left.capturedAt))[0];
+
+  if (previousEndReading?.finalValue === null || previousEndReading?.finalValue === undefined) {
+    return { status: "OK", note: null };
+  }
+
+  const diff = proposedValue - previousEndReading.finalValue;
+
+  if (diff < 0) {
+    return {
+      status: "REVERSAL",
+      note: `START reading (${proposedValue}) is less than previous END reading (${previousEndReading.finalValue}) from ${previousSession.date}. Possible odometer reversal, wrong image, wrong vehicle, or old photo.`,
+    };
+  }
+
+  if (diff > MAX_REASONABLE_DAY_DISTANCE_KM) {
+    return {
+      status: "GAP",
+      note: `Gap of ${diff} km between previous END (${previousEndReading.finalValue}) on ${previousSession.date} and current START (${proposedValue}). Manager review required.`,
+    };
+  }
+
+  return { status: "OK", note: null };
+}
+
+// MOD-001: Agent discards an odometer reading (never deleted, just marked DISCARDED)
+export async function discardOdometerReading(
+  user: User,
+  readingId: string,
+  input: { reason: OdometerDiscardReason; note: string },
+) {
+  assertRole(user, ["SALES_AGENT"]);
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (!session || session.userId !== user.id) {
+      throw new Error("You can only discard your own readings.");
+    }
+
+    if (reading.status === "DISCARDED") {
+      throw new Error("This reading has already been discarded.");
+    }
+
+    // MOD-008: Prevent discard if this date is already claimed
+    const readingDateKey = toDateKey(reading.capturedAt);
+    assertOdometerDateUnlocked(database, user.id, readingDateKey);
+
+    const now = nowIso();
+    reading.status = "DISCARDED";
+    reading.isActiveReading = false;
+    reading.discardedAt = now;
+    reading.discardedBy = user.id;
+    reading.discardReason = input.reason;
+    reading.discardNote = input.note.trim() || null;
+    reading.finalValue = null;
+    logAudit(
+      database,
+      user,
+      "OdometerReading",
+      reading.id,
+      "DISCARDED",
+      `Agent discarded reading: ${input.reason}. ${input.note.trim()}`,
+    );
+    return reading;
+  });
+}
+
+// MOD-001: Agent manually enters an odometer reading value and system computes difference
+export async function submitAgentManualReading(user: User, readingId: string, manualValue: number) {
+  assertRole(user, ["SALES_AGENT"]);
+
+  if (!Number.isFinite(manualValue) || manualValue < 0) {
+    throw new Error("Manual reading must be a non-negative number.");
+  }
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (!session || session.userId !== user.id) {
+      throw new Error("You can only update your own readings.");
+    }
+
+    assertOdometerDateUnlocked(database, user.id, toDateKey(reading.capturedAt));
+
+    reading.agentEnteredReading = manualValue;
+    reading.readingDifference = reading.ocrValue !== null ? Math.abs(manualValue - reading.ocrValue) : null;
+
+    if (
+      reading.ocrValue !== null &&
+      reading.readingDifference !== null &&
+      reading.readingDifference <= MAX_AUTO_ODOMETER_DIFF_KM &&
+      reading.status === "AWAITING_CONFIRMATION"
+    ) {
+      reading.finalValue = manualValue;
+      reading.status = "CONFIRMED";
+      reading.verificationNote = `Agent entered manual reading: ${manualValue}. OCR was: ${reading.ocrValue ?? "N/A"}. Difference: ${reading.readingDifference ?? "N/A"}.`;
+    } else if (reading.status === "MANUAL_REVIEW_REQUIRED" || reading.status === "AWAITING_CONFIRMATION") {
+      reading.finalValue = null;
+      reading.status = "MANUAL_REVIEW_REQUIRED";
+      reading.reviewReason = `Agent/OCR mismatch ${reading.readingDifference ?? "N/A"} km or OCR missing.`;
+      reading.managerReviewRequiredAt = nowIso();
+      reading.verificationNote = `Agent entered manual reading: ${manualValue}. OCR was: ${reading.ocrValue ?? "N/A"}. Difference: ${reading.readingDifference ?? "N/A"}. Manager review required.`;
+    }
+
+    logAudit(
+      database,
+      user,
+      "OdometerReading",
+      reading.id,
+      "AGENT_MANUAL_ENTRY",
+      `Agent entered manual reading: ${manualValue}. OCR value: ${reading.ocrValue}. Difference: ${reading.readingDifference}.`,
+    );
+    return reading;
+  });
+}
+
+// MOD-010: Correct an odometer reading (creates version history)
+export async function correctOdometerReading(
+  user: User,
+  readingId: string,
+  input: { newValue: number; reason: string },
+) {
+  assertRole(user, ["MANAGER"]);
+
+  if (!Number.isFinite(input.newValue) || input.newValue < 0) {
+    throw new Error("Corrected reading must be a non-negative number.");
+  }
+
+  if (!input.reason.trim()) {
+    throw new Error("Correction reason is required.");
+  }
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    if (reading.status === "DISCARDED") {
+      throw new Error("Cannot correct a discarded reading.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    const readingDateKey = session?.date ?? toDateKey(reading.capturedAt);
+    const agentId = session?.userId ?? "";
+    const lock = agentId ? getOdometerLockStatus(database, agentId, readingDateKey) : { status: "OPEN" as OdometerLockStatus, claimId: null, message: null };
+    if (readingDateKey) {
+      if (lock.status === "PAID_LOCKED") {
+        throw new Error("Paid reimbursement dates cannot be directly modified. Create an adjustment request outside the original paid claim.");
+      }
+
+      if (lock.status === "CLAIMED") {
+        reading.lockStatus = "REOPENED_FOR_CORRECTION";
+        reading.reopenedForCorrectionBy = user.id;
+        reading.reopenedForCorrectionAt = nowIso();
+        reading.reopenedForCorrectionReason = input.reason.trim();
+      }
+    }
+
+    const now = nowIso();
+    const previousValue = reading.finalValue;
+    const previousVersion = reading.correctionVersion ?? 1;
+
+    // Create correction history entry
+    database.odometerCorrections ??= [];
+    database.odometerCorrections.push({
+      id: randomUUID(),
+      readingId: reading.id,
+      version: previousVersion,
+      type: "READING_UPDATE",
+      oldValue: previousValue,
+      newValue: input.newValue,
+      reason: input.reason.trim(),
+      approvedBy: user.id,
+      approvedAt: now,
+      createdBy: user.id,
+      createdAt: now,
+      linkedClaimId: lock.claimId,
+      dateKey: readingDateKey,
+      status: lock.status === "CLAIMED" ? "REOPENED" : "APPLIED",
+    });
+
+    reading.previousReadingValue = previousValue;
+    reading.finalValue = input.newValue;
+    reading.managerFinalReading = input.newValue;
+    reading.correctionVersion = previousVersion + 1;
+    reading.correctionReason = input.reason.trim();
+    reading.correctionApprovedBy = user.id;
+    reading.correctionApprovedAt = now;
+    reading.status = "MANUAL_VERIFIED";
+    reading.verifiedBy = user.id;
+    reading.managerReviewedAt = now;
+    reading.managerRemark = input.reason.trim();
+    reading.lockStatus = lock.status === "CLAIMED" ? "REOPENED_FOR_CORRECTION" : "OPEN";
+
+    logAudit(
+      database,
+      user,
+      "OdometerReading",
+      reading.id,
+      "CORRECTION",
+      `Manager corrected reading from ${previousValue} to ${input.newValue}. Reason: ${input.reason.trim()}.`,
+    );
+    return reading;
+  });
+}
+
+// MOD-010: Paid odometer correction workflow. Paid claims are not edited directly;
+// a separate reimbursement adjustment entry is created for accounting approval/settlement.
+export async function createPaidOdometerCorrectionAdjustment(
+  user: User,
+  readingId: string,
+  input: { newValue: number; reason: string },
+) {
+  assertRole(user, ["MANAGER"]);
+
+  if (!Number.isFinite(input.newValue) || input.newValue < 0) {
+    throw new Error("Corrected reading must be a non-negative number.");
+  }
+
+  const reason = input.reason.trim();
+  if (!reason) {
+    throw new Error("Correction reason is required.");
+  }
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (!session) {
+      throw new Error("The workday session for this reading could not be found.");
+    }
+
+    const workdayDate = session.date ?? toDateKey(reading.capturedAt);
+    const paidClaim = database.reimbursementClaims.find(
+      (claim) =>
+        claim.agentId === session.userId &&
+        claim.status === "PAID" &&
+        claim.lineItems.some((line) => line.date === workdayDate),
+    );
+
+    if (!paidClaim) {
+      throw new Error("No paid reimbursement claim was found for this reading date. Use normal manager correction before payment.");
+    }
+
+    const line = paidClaim.lineItems.find((entry) => entry.date === workdayDate);
+    if (!line) {
+      throw new Error("The paid claim line item for this reading date could not be found.");
+    }
+
+    const correctedStart = reading.type === "START" ? input.newValue : line.startReading;
+    const correctedEnd = reading.type === "END" ? input.newValue : line.endReading;
+    const correctedDistanceKm = Math.round((correctedEnd - correctedStart) * 10) / 10;
+
+    if (correctedDistanceKm < 0) {
+      throw new Error("Corrected paid claim distance cannot be negative. Manager review must fix START/END pairing first.");
+    }
+
+    const originalDistanceKm = line.distanceKm;
+    const distanceDifferenceKm = Math.round((correctedDistanceKm - originalDistanceKm) * 10) / 10;
+    const originalAmount = Math.round(line.fuelAmount * 100) / 100;
+    const correctedAmount = Math.round(correctedDistanceKm * FUEL_REIMBURSEMENT_RATE * 100) / 100;
+    const adjustmentAmount = Math.round((correctedAmount - originalAmount) * 100) / 100;
+    const now = nowIso();
+    const correctionRequestId = randomUUID();
+
+    database.odometerCorrections ??= [];
+    database.odometerCorrections.unshift({
+      id: correctionRequestId,
+      readingId: reading.id,
+      version: reading.correctionVersion ?? 1,
+      type: "REIMBURSEMENT_ADJUSTMENT",
+      oldValue: reading.finalValue,
+      newValue: input.newValue,
+      reason,
+      approvedBy: null,
+      approvedAt: null,
+      createdBy: user.id,
+      createdAt: now,
+      linkedClaimId: paidClaim.id,
+      dateKey: workdayDate,
+      status: "PENDING_MANAGER_REOPEN",
+    });
+
+    database.reimbursementAdjustments ??= [];
+    const adjustment = {
+      id: randomUUID(),
+      agentId: session.userId,
+      workdayDate,
+      originalClaimId: paidClaim.id,
+      correctionRequestId,
+      readingId: reading.id,
+      readingType: reading.type,
+      originalDistanceKm,
+      correctedDistanceKm,
+      distanceDifferenceKm,
+      originalAmount,
+      correctedAmount,
+      adjustmentAmount,
+      adjustmentType: adjustmentAmount >= 0 ? ("EXTRA_PAYABLE" as const) : ("RECOVERY" as const),
+      status: "PENDING_ACCOUNTING_APPROVAL" as const,
+      reason,
+      requestedBy: user.id,
+      requestedAt: now,
+      approvedBy: null,
+      approvedAt: null,
+      settledInClaimId: null,
+      settledBy: null,
+      settledAt: null,
+      remark: null,
+    };
+    database.reimbursementAdjustments.unshift(adjustment);
+
+    reading.lockStatus = "PAID_LOCKED";
+    reading.correctionReason = reason;
+    reading.reopenedForCorrectionBy = user.id;
+    reading.reopenedForCorrectionAt = now;
+    reading.reopenedForCorrectionReason = reason;
+
+    logAudit(
+      database,
+      user,
+      "ReimbursementAdjustment",
+      adjustment.id,
+      "CREATE",
+      `Created paid odometer correction adjustment for ${workdayDate}: distance ${originalDistanceKm} -> ${correctedDistanceKm}, amount adjustment ${adjustmentAmount}.`,
+    );
+
+    return adjustment;
+  });
+}
+
+export async function decideReimbursementAdjustment(
+  user: User,
+  adjustmentId: string,
+  decision: "APPROVED" | "REJECTED",
+  remark: string,
+) {
+  assertRole(user, ["ACCOUNTING", "MANAGER"]);
+
+  return updateDatabase((database) => {
+    const adjustment = (database.reimbursementAdjustments ?? []).find((entry) => entry.id === adjustmentId);
+    if (!adjustment) {
+      throw new Error("Reimbursement adjustment not found.");
+    }
+    if (adjustment.status !== "PENDING_ACCOUNTING_APPROVAL") {
+      throw new Error("Only pending reimbursement adjustments can be approved or rejected.");
+    }
+
+    const now = nowIso();
+    adjustment.status = decision;
+    adjustment.approvedBy = decision === "APPROVED" ? user.id : null;
+    adjustment.approvedAt = decision === "APPROVED" ? now : null;
+    adjustment.remark = remark.trim() || null;
+
+    logAudit(database, user, "ReimbursementAdjustment", adjustment.id, decision, remark.trim() || decision);
+    return adjustment;
+  });
+}
+
+export async function settleReimbursementAdjustment(
+  user: User,
+  adjustmentId: string,
+  input: { settledInClaimId?: string | null; remark?: string | null },
+) {
+  assertRole(user, ["ACCOUNTING"]);
+
+  return updateDatabase((database) => {
+    const adjustment = (database.reimbursementAdjustments ?? []).find((entry) => entry.id === adjustmentId);
+    if (!adjustment) {
+      throw new Error("Reimbursement adjustment not found.");
+    }
+    if (adjustment.status !== "APPROVED") {
+      throw new Error("Only approved reimbursement adjustments can be settled.");
+    }
+
+    adjustment.status = "SETTLED";
+    adjustment.settledInClaimId = input.settledInClaimId?.trim() || null;
+    adjustment.settledBy = user.id;
+    adjustment.settledAt = nowIso();
+    adjustment.remark = input.remark?.trim() || adjustment.remark;
+
+    logAudit(database, user, "ReimbursementAdjustment", adjustment.id, "SETTLED", adjustment.remark || "Adjustment settled.");
+    return adjustment;
+  });
+}
+
+// MOD-004: Acknowledge duplicate image warning
+export async function acknowledgeDuplicateOdometerWarning(user: User, readingId: string) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    if (!reading.duplicateOfReadingId) {
+      throw new Error("This reading does not have a duplicate warning.");
+    }
+
+    const now = nowIso();
+    reading.duplicateWarningAcknowledgedBy = user.id;
+    reading.duplicateWarningAcknowledgedAt = now;
+    logAudit(
+      database,
+      user,
+      "OdometerReading",
+      reading.id,
+      "DUPLICATE_ACKNOWLEDGED",
+      `Manager acknowledged duplicate image warning for reading ${reading.duplicateOfReadingId.slice(0, 8)}.`,
+    );
+    return reading;
+  });
+}
+
+// MOD-013 (enhanced): Manager verifies an odometer reading with structured reason
+export async function managerVerifyOdometerReading(
+  user: User,
+  readingId: string,
+  input: { value: number; remark: string },
+) {
+  assertRole(user, ["MANAGER"]);
+
+  if (!Number.isFinite(input.value) || input.value < 0) {
+    throw new Error("Verified reading must be a non-negative number.");
+  }
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    if (reading.status !== "MANUAL_REVIEW_REQUIRED") {
+      throw new Error("Only readings pending manual review can be verified by manager.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (session) {
+      const lock = getOdometerLockStatus(database, session.userId, session.date);
+      if (lock.status === "PAID_LOCKED") {
+        throw new Error("Paid reimbursement dates cannot be directly modified. Create an adjustment request outside the original paid claim.");
+      }
+    }
+
+    const now = nowIso();
+    reading.finalValue = input.value;
+    reading.managerFinalReading = input.value;
+    reading.status = "MANUAL_VERIFIED";
+    reading.verifiedBy = user.id;
+    reading.managerReviewedAt = now;
+    reading.managerRemark = input.remark.trim() || "Manager verified reading.";
+    reading.verificationNote = `Manager verified. Value set to ${input.value}. ${input.remark.trim()}`;
+    reading.reviewReason = null;
+
+    logAudit(
+      database,
+      user,
+      "OdometerReading",
+      reading.id,
+      "MANAGER_VERIFIED",
+      `Manager set final value to ${input.value}. ${input.remark.trim()}`,
+    );
+    return reading;
+  });
+}
+
+// MOD-007/013: Compute daily summary for an agent
+export function computeOdometerDaySummary(database: Database, agentId: string, dateKey: string): OdometerDaySummary {
+  const agent = database.users.find((entry) => entry.id === agentId);
+  const session = database.workdaySessions.find(
+    (entry) => entry.userId === agentId && entry.date === dateKey,
+  );
+  const readings = database.odometerReadings.filter(
+    (entry) =>
+      entry.sessionId === session?.id &&
+      entry.isActiveReading !== false &&
+      entry.status !== "DISCARDED",
+  );
+  const startReading = readings.find((entry) => entry.type === "START" && entry.finalValue !== null);
+  const endReading = [...readings].reverse().find((entry) => entry.type === "END" && entry.finalValue !== null);
+  const visits = database.siteVisits.filter((entry) => entry.sessionId === session?.id);
+  const corrections = database.odometerCorrections?.filter(
+    (entry) => readings.some((reading) => reading.id === entry.readingId),
+  ).length ?? 0;
+  const totalKm =
+    startReading?.finalValue != null && endReading?.finalValue != null
+      ? Math.max(endReading.finalValue - startReading.finalValue, 0)
+      : null;
+  const hasStart = startReading?.finalValue != null;
+  const hasEnd = endReading?.finalValue != null;
+  const dayStatus = hasStart && hasEnd
+    ? "COMPLETE"
+    : hasStart
+      ? "INCOMPLETE_END"
+      : hasEnd
+        ? "INCOMPLETE_START"
+        : "INCOMPLETE_BOTH";
+  const continuityIssues = readings.filter((entry) => entry.continuityStatus && entry.continuityStatus !== "OK");
+  const missingProofs: string[] = [];
+  if (!hasStart) missingProofs.push("START reading");
+  if (!hasEnd) missingProofs.push("END reading");
+  readings.forEach((reading) => {
+    if (reading.watermarkStatus === "MISSING") missingProofs.push(`GPS watermark on ${reading.type}`);
+  });
+  const claimId = getClaimIdForSession(database, session?.id ?? "");
+
+  return {
+    date: dateKey,
+    agentId,
+    agentName: agent?.name ?? "Unknown",
+    startReading: startReading?.finalValue ?? null,
+    endReading: endReading?.finalValue ?? null,
+    totalKm,
+    siteVisits: visits.length,
+    dayStatus,
+    continuityStatus: continuityIssues.length > 0 ? continuityIssues[0]?.continuityStatus ?? "OK" : "OK",
+    missingProofs,
+    corrections,
+    claimStatus: claimId ? "CLAIMED" : null,
+    hasLateUpload: readings.some((entry) => entry.uploadSource === "PAST"),
+  };
+}
+
+// MOD-022: Close a site
+export async function closeSite(
+  user: User,
+  siteId: string,
+  input: { reason: string; remarks: string },
+) {
+  assertRole(user, ["SALES_AGENT", "MANAGER"]);
+
+  return updateDatabase((database) => {
+    const site = database.leadSites.find((entry) => entry.id === siteId);
+    if (!site) {
+      throw new Error("Site not found.");
+    }
+    if (site.siteStatus === "DEAD" || site.siteStatus === "LOST") {
+      throw new Error("Site is already closed.");
+    }
+
+    const now = nowIso();
+    site.closureReason = input.reason.trim();
+    site.closureRemarks = input.remarks.trim() || null;
+
+    if (user.role === "MANAGER") {
+      site.siteStatus = input.reason === "LOST" ? "LOST" : "DEAD";
+      site.closedBy = user.id;
+      site.closedAt = now;
+      site.closureApprovedBy = user.id;
+      site.closureApprovedAt = now;
+      logAudit(database, user, "LeadSite", site.id, "SITE_CLOSED", `Site closed: ${input.reason}. ${input.remarks.trim()}`);
+    } else {
+      site.closedBy = null;
+      site.closedAt = null;
+      site.closureApprovedBy = null;
+      site.closureApprovedAt = null;
+      logAudit(database, user, "LeadSite", site.id, "SITE_CLOSURE_REQUESTED", `Agent requested site closure: ${input.reason}. ${input.remarks.trim()}`);
+    }
+
+    return site;
+  });
+}
+
+// MOD-022: Reopen a closed site
+export async function reopenSite(
+  user: User,
+  siteId: string,
+  reason: string,
+) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const site = database.leadSites.find((entry) => entry.id === siteId);
+    if (!site) {
+      throw new Error("Site not found.");
+    }
+    if (site.siteStatus === "ACTIVE") {
+      throw new Error("Site is already active.");
+    }
+
+    const now = nowIso();
+    site.siteStatus = "ACTIVE";
+    site.reopenedBy = user.id;
+    site.reopenedAt = now;
+    site.reopenReason = reason.trim() || "Manager reopened site.";
+    // Clear closure fields
+    site.closedBy = null;
+    site.closedAt = null;
+    site.closureApprovedBy = null;
+    site.closureApprovedAt = null;
+
+    logAudit(database, user, "LeadSite", site.id, "SITE_REOPENED", `Site reopened: ${reason.trim()}`);
+    return site;
+  });
+}
+
+// MOD-022: Close a lead (all sites)
+export async function closeLead(
+  user: User,
+  leadId: string,
+  input: { reason: string; remarks: string },
+) {
+  assertRole(user, ["SALES_AGENT", "MANAGER"]);
+
+  return updateDatabase((database) => {
+    const lead = database.leads.find((entry) => entry.id === leadId);
+    if (!lead) {
+      throw new Error("Lead not found.");
+    }
+
+    if (user.role === "SALES_AGENT" && lead.agentId !== user.id) {
+      throw new Error("You can only close your own leads.");
+    }
+
+    const now = nowIso();
+    lead.closureReason = input.reason.trim();
+    lead.closureRemarks = input.remarks.trim() || null;
+    lead.closureRequestedBy = lead.closureRequestedBy ?? user.id;
+    lead.closureRequestedAt = lead.closureRequestedAt ?? now;
+
+    if (user.role === "MANAGER") {
+      lead.stage = input.reason === "LOST" ? "LOST" : "DEAD";
+      lead.closedBy = user.id;
+      lead.closedAt = now;
+      lead.closureApprovedBy = user.id;
+      lead.closureApprovedAt = now;
+      lead.closureStatus = "APPROVED_CLOSED";
+
+      // Close all active sites for this lead only after manager approval.
+      database.leadSites
+        .filter((site) => site.leadId === leadId && site.siteStatus === "ACTIVE")
+        .forEach((site) => {
+          site.siteStatus = lead.stage === "LOST" ? "LOST" : "DEAD";
+          site.closureReason = input.reason.trim();
+          site.closedBy = user.id;
+          site.closedAt = now;
+          site.closureApprovedBy = user.id;
+          site.closureApprovedAt = now;
+        });
+
+      logAudit(database, user, "Lead", lead.id, "LEAD_CLOSED", `Lead closed: ${input.reason}. ${input.remarks.trim()}`);
+    } else {
+      lead.closureApprovedBy = null;
+      lead.closureApprovedAt = null;
+      lead.closedBy = null;
+      lead.closedAt = null;
+      lead.closureStatus = "PENDING_MANAGER_APPROVAL";
+      logAudit(database, user, "Lead", lead.id, "LEAD_CLOSURE_REQUESTED", `Agent requested lead closure: ${input.reason}. ${input.remarks.trim()}`);
+    }
+    return lead;
+  });
+}
+
+export async function rejectLeadClosure(
+  user: User,
+  leadId: string,
+  reason: string,
+) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const lead = database.leads.find((entry) => entry.id === leadId);
+    if (!lead) {
+      throw new Error("Lead not found.");
+    }
+
+    if (lead.closureStatus !== "PENDING_MANAGER_APPROVAL") {
+      throw new Error("Only pending lead closure requests can be rejected.");
+    }
+
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      throw new Error("Manager rejection reason is required.");
+    }
+
+    lead.closureStatus = "REJECTED";
+    lead.closureApprovedBy = user.id;
+    lead.closureApprovedAt = nowIso();
+    lead.closedBy = null;
+    lead.closedAt = null;
+    lead.reopenReason = trimmedReason;
+    logAudit(database, user, "Lead", lead.id, "LEAD_CLOSURE_REJECTED", trimmedReason);
+    return lead;
+  });
+}
+
+export async function reopenLead(
+  user: User,
+  leadId: string,
+  reason: string,
+) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    const lead = database.leads.find((entry) => entry.id === leadId);
+    if (!lead) {
+      throw new Error("Lead not found.");
+    }
+
+    const now = nowIso();
+    lead.stage = "TALKS";
+    lead.closureReason = null;
+    lead.closureRemarks = null;
+    lead.closedBy = null;
+    lead.closedAt = null;
+    lead.closureApprovedBy = null;
+    lead.closureApprovedAt = null;
+    lead.reopenedBy = user.id;
+    lead.reopenedAt = now;
+    lead.reopenReason = reason.trim() || "Manager reopened lead.";
+    lead.closureStatus = "OPEN";
+    database.leadSites
+      .filter((site) => site.leadId === leadId && (site.siteStatus === "DEAD" || site.siteStatus === "LOST"))
+      .forEach((site) => {
+        site.siteStatus = "ACTIVE";
+        site.reopenedBy = user.id;
+        site.reopenedAt = now;
+        site.reopenReason = lead.reopenReason;
+      });
+    logAudit(database, user, "Lead", lead.id, "LEAD_REOPENED", lead.reopenReason);
+    return lead;
+  });
+}
+
+export async function recordSiteDirectionUse(user: User, siteId: string) {
+  assertRole(user, ["SALES_AGENT", "MANAGER"]);
+
+  return updateDatabase((database) => {
+    const site = database.leadSites.find((entry) => entry.id === siteId);
+    if (!site) {
+      throw new Error("Site not found.");
+    }
+
+    const lead = database.leads.find((entry) => entry.id === site.leadId);
+    if (user.role === "SALES_AGENT" && lead?.agentId !== user.id) {
+      throw new Error("You can only open directions for your own sites.");
+    }
+
+    if (!site.latLng && !site.siteAddress.trim()) {
+      throw new Error("This site has no coordinate or address. Update site location before opening directions.");
+    }
+
+    site.directionsUsageCount = (site.directionsUsageCount ?? 0) + 1;
+    site.directionsLastUsedAt = nowIso();
+    site.lastDirectionsUsedBy = user.id;
+    logAudit(database, user, "LeadSite", site.id, "DIRECTIONS_OPENED", `Opened map directions for ${site.siteName}.`);
+    return site;
+  });
+}
+
+function getLeadStagePinColor(stage: LeadStage): MapPinColor {
+  if (stage === "FINALIZED") {
+    return "GREEN";
+  }
+
+  if (stage === "NEGOTIATING") {
+    return "YELLOW";
+  }
+
+  if (stage === "MISSED") {
+    return "ORANGE";
+  }
+
+  if (stage === "DEAD") {
+    return "GRAY";
+  }
+
+  if (stage === "LOST") {
+    return "RED";
+  }
+
+  return "BLUE";
+}
+
+function buildSiteMapMarkers(database: Database, user: User): SiteMapMarker[] {
+  const visibleLeads = database.leads.filter((lead) => user.role !== "SALES_AGENT" || lead.agentId === user.id);
+  const visibleLeadIds = new Set(visibleLeads.map((lead) => lead.id));
+
+  return database.leadSites
+    .filter((site) => visibleLeadIds.has(site.leadId))
+    .map((site) => {
+      const lead = visibleLeads.find((entry) => entry.id === site.leadId);
+      const leadStage = lead?.stage ?? "TALKS";
+      const primaryStakeholder = site.stakeholders.find((stakeholder) => stakeholder.role !== "FOUND_NO_ONE" && stakeholder.name.trim()) ?? null;
+      return {
+        siteId: site.id,
+        leadId: site.leadId,
+        plantId: site.plantId,
+        siteName: site.siteName,
+        siteAddress: site.siteAddress,
+        siteStatus: site.siteStatus ?? "ACTIVE",
+        leadStage,
+        pinColor: getLeadStagePinColor(leadStage),
+        latLng: site.latLng,
+        stakeholderMasterId: primaryStakeholder?.stakeholderMasterId ?? null,
+        stakeholderName: primaryStakeholder?.name ?? null,
+        stakeholderPhone: primaryStakeholder?.phone ?? null,
+        phoneVerificationStatus: primaryStakeholder?.phoneVerificationStatus ?? null,
+        grade: site.currentConcreteGrade,
+        quantityCum: site.currentQuantityCum,
+        lastVisitedAt: site.lastVisitedAt,
+        missingLocation: !site.latLng,
+      } satisfies SiteMapMarker;
+    })
+    .sort((left, right) => compareIsoAsc(right.lastVisitedAt, left.lastVisitedAt));
+}
+
+export async function getSiteMapMarkersForUser(user: User): Promise<SiteMapMarker[]> {
+  assertRole(user, ["SALES_AGENT", "MANAGER", "PRODUCTION_MANAGER"]);
+  const database =
+    user.role === "SALES_AGENT"
+      ? await getAgentScopedDashboardDatabase(user, { sections: ["leads"] })
+      : await getManagerScopedDashboardDatabase();
+
+  return buildSiteMapMarkers(database, user);
 }
 
 function normalizeStakeholders(input: string) {
@@ -1223,7 +2339,7 @@ function normalizeStakeholders(input: string) {
         .map<StakeholderContact | null>((entry) => {
           const role = normalizeStakeholderRole(entry.role);
           const name = `${entry.name ?? ""}`.trim();
-          const phone = `${entry.phone ?? ""}`.trim();
+          const phone = normalizeStakeholderPhone(`${entry.phone ?? ""}`, role);
           const label = `${entry.label ?? ""}`.trim() || getStakeholderLabel(role);
 
           if (role !== "FOUND_NO_ONE" && !name) {
@@ -1248,9 +2364,10 @@ function normalizeStakeholders(input: string) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map<StakeholderContact>((line, index) => {
-      const [name = "", phone = ""] = line.split(",").map((part) => part.trim());
       const legacyRoles: Array<StakeholderContact["role"]> = ["CONTRACTOR", "OWNER_BUILDER", "SITE_SUPERVISOR"];
       const role = legacyRoles[index] ?? "OTHERS";
+      const [name = "", rawPhone = ""] = line.split(",").map((part) => part.trim());
+      const phone = normalizeStakeholderPhone(rawPhone, role);
 
       return {
         label: getStakeholderLabel(role),
@@ -1259,6 +2376,24 @@ function normalizeStakeholders(input: string) {
         role,
       };
     });
+}
+
+function normalizeStakeholderPhone(value: string, role: StakeholderContact["role"]) {
+  const digits = value.replace(/\D/g, "").slice(-10);
+
+  if (role === "FOUND_NO_ONE") {
+    return digits;
+  }
+
+  if (digits.length !== 10 || INVALID_PHONE_PATTERNS.has(digits) || !/^[6-9]/.test(digits)) {
+    throw new Error("Stakeholder phone must be a valid 10 digit Indian mobile number starting with 6, 7, 8, or 9.");
+  }
+
+  return digits;
+}
+
+function hasMeaningfulStakeholder(stakeholders: StakeholderContact[]) {
+  return stakeholders.some((entry) => entry.role !== "FOUND_NO_ONE" && entry.name.trim() && entry.phone.trim());
 }
 
 function dedupeStakeholders(stakeholders: StakeholderContact[]) {
@@ -1272,6 +2407,351 @@ function dedupeStakeholders(stakeholders: StakeholderContact[]) {
     seen.add(key);
     return true;
   });
+}
+
+function upsertStakeholderMasters(
+  database: Database,
+  user: User,
+  stakeholders: StakeholderContact[],
+  leadId: string,
+  siteId: string,
+  now: string,
+) {
+  database.stakeholderMasters ??= [];
+
+  return stakeholders.map((stakeholder) => {
+    if (stakeholder.role === "FOUND_NO_ONE" || !stakeholder.name.trim() || !stakeholder.phone.trim()) {
+      return stakeholder;
+    }
+
+    const role = normalizeStakeholderRole(stakeholder.role);
+    const existing = database.stakeholderMasters.find((entry) => entry.phone === stakeholder.phone) ?? null;
+    const master: StakeholderMaster =
+      existing ??
+      {
+        id: randomUUID(),
+        name: stakeholder.name.trim(),
+        phone: stakeholder.phone,
+        role,
+        phoneVerificationStatus: "UNVERIFIED",
+        phoneVerifiedAt: null,
+        lastCallVerificationAt: null,
+        lastWhatsappVerificationAt: null,
+        lastVerificationError: null,
+        linkedSiteIds: [],
+        linkedLeadIds: [],
+        billingResponsibility: role === "CONTRACTOR" ? "CONTRACTOR" : role === "OWNER_BUILDER" ? "BUILDER" : "NOT_SET",
+        materialScope: "",
+        gstin: null,
+        pan: null,
+        billingAddress: null,
+        createdBy: user.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+    master.name = stakeholder.name.trim();
+    master.role = role;
+    master.updatedAt = now;
+    if (!master.linkedSiteIds.includes(siteId)) {
+      master.linkedSiteIds.push(siteId);
+    }
+    if (!master.linkedLeadIds.includes(leadId)) {
+      master.linkedLeadIds.push(leadId);
+    }
+    if (!existing) {
+      database.stakeholderMasters.push(master);
+      logAudit(database, user, "StakeholderMaster", master.id, "CREATE", `Created stakeholder ${master.name} for site ${siteId.slice(0, 8)}.`);
+    }
+
+    return {
+      ...stakeholder,
+      role,
+      phoneVerificationStatus: stakeholder.phoneVerificationStatus ?? master.phoneVerificationStatus,
+      phoneVerifiedAt: stakeholder.phoneVerifiedAt ?? master.phoneVerifiedAt,
+      stakeholderMasterId: master.id,
+      contactPresence: stakeholder.contactPresence ?? "PRESENT",
+    };
+  });
+}
+
+function canVerifyStakeholder(user: User, database: Database, stakeholder: StakeholderMaster) {
+  if (user.role !== "SALES_AGENT") {
+    return true;
+  }
+
+  return stakeholder.linkedLeadIds.some((leadId) => database.leads.some((lead) => lead.id === leadId && lead.agentId === user.id));
+}
+
+function getStakeholderPrimaryContext(database: Database, stakeholder: StakeholderMaster) {
+  const site =
+    stakeholder.linkedSiteIds
+      .map((siteId) => database.leadSites.find((entry) => entry.id === siteId))
+      .find((entry): entry is LeadSite => Boolean(entry)) ?? null;
+  const lead = site ? database.leads.find((entry) => entry.id === site.leadId) ?? null : null;
+
+  return {
+    site,
+    lead,
+    siteName: site?.siteName ?? lead?.siteName ?? "",
+  };
+}
+
+function syncStakeholderContactVerification(database: Database, stakeholder: StakeholderMaster) {
+  for (const site of database.leadSites) {
+    site.stakeholders = site.stakeholders.map((contact) => {
+      const sameMaster = contact.stakeholderMasterId && contact.stakeholderMasterId === stakeholder.id;
+      const samePhone = contact.phone === stakeholder.phone;
+      if (!sameMaster && !samePhone) {
+        return contact;
+      }
+
+      return {
+        ...contact,
+        stakeholderMasterId: stakeholder.id,
+        phoneVerificationStatus: stakeholder.phoneVerificationStatus,
+        phoneVerifiedAt: stakeholder.phoneVerifiedAt,
+      };
+    });
+  }
+
+  for (const visit of database.siteVisits) {
+    visit.stakeholders = visit.stakeholders.map((contact) => {
+      const sameMaster = contact.stakeholderMasterId && contact.stakeholderMasterId === stakeholder.id;
+      const samePhone = contact.phone === stakeholder.phone;
+      if (!sameMaster && !samePhone) {
+        return contact;
+      }
+
+      return {
+        ...contact,
+        stakeholderMasterId: stakeholder.id,
+        phoneVerificationStatus: stakeholder.phoneVerificationStatus,
+        phoneVerifiedAt: stakeholder.phoneVerifiedAt,
+      };
+    });
+  }
+}
+
+export async function requestStakeholderContactVerification(user: User, stakeholderMasterId: string, channel: ContactVerificationChannel) {
+  assertRole(user, ["SALES_AGENT", "MANAGER"]);
+
+  const { stakeholder, message, siteId, leadId } = await updateDatabase((database) => {
+    database.contactVerificationEvents ??= [];
+    database.stakeholderMasters ??= [];
+    const target = database.stakeholderMasters.find((entry) => entry.id === stakeholderMasterId);
+    if (!target) {
+      throw new Error("Stakeholder was not found.");
+    }
+    if (!canVerifyStakeholder(user, database, target)) {
+      throw new Error("You can only verify stakeholders linked to your own leads.");
+    }
+
+    const context = getStakeholderPrimaryContext(database, target);
+    return {
+      stakeholder: { ...target },
+      message: buildVerificationMessage(channel, target.name, context.siteName),
+      siteId: context.site?.id ?? null,
+      leadId: context.lead?.id ?? context.site?.leadId ?? null,
+    };
+  });
+
+  const result = channel === "CALL"
+    ? await placeCallVerification(stakeholder.phone, message)
+    : await sendWhatsappVerification(stakeholder.phone, message);
+
+  return updateDatabase((database) => {
+    database.contactVerificationEvents ??= [];
+    const target = database.stakeholderMasters.find((entry) => entry.id === stakeholderMasterId);
+    if (!target) {
+      throw new Error("Stakeholder was not found.");
+    }
+    if (!canVerifyStakeholder(user, database, target)) {
+      throw new Error("You can only verify stakeholders linked to your own leads.");
+    }
+
+    const now = nowIso();
+    const event: ContactVerificationEvent = {
+      id: randomUUID(),
+      stakeholderMasterId: target.id,
+      leadId,
+      siteId,
+      phone: target.phone,
+      channel,
+      provider: result.provider,
+      status: result.status,
+      providerMessageId: result.providerMessageId,
+      error: result.error,
+      requestedBy: user.id,
+      requestedAt: now,
+      verifiedAt: null,
+      metadata: result.metadata,
+    };
+
+    database.contactVerificationEvents.unshift(event);
+    target.updatedAt = now;
+    target.lastVerificationError = result.error;
+
+    if (channel === "CALL") {
+      target.lastCallVerificationAt = now;
+      target.phoneVerificationStatus = result.status === "SENT" ? "CALL_INITIATED" : result.status === "FAILED" ? "FAILED" : target.phoneVerificationStatus;
+    } else {
+      target.lastWhatsappVerificationAt = now;
+      target.phoneVerificationStatus =
+        result.status === "SENT" ? "WHATSAPP_SENT" : result.status === "FAILED" ? "FAILED" : target.phoneVerificationStatus;
+    }
+
+    syncStakeholderContactVerification(database, target);
+    logAudit(
+      database,
+      user,
+      "StakeholderMaster",
+      target.id,
+      `${channel}_VERIFICATION_${result.status}`,
+      `${channel === "CALL" ? "Call" : "WhatsApp"} verification ${result.status.toLowerCase()} for ${target.name}.`,
+    );
+
+    return { stakeholder: target, event };
+  });
+}
+
+export async function markStakeholderContactVerified(user: User, stakeholderMasterId: string, channel: ContactVerificationChannel) {
+  assertRole(user, ["MANAGER"]);
+
+  return updateDatabase((database) => {
+    database.contactVerificationEvents ??= [];
+    const target = database.stakeholderMasters.find((entry) => entry.id === stakeholderMasterId);
+    if (!target) {
+      throw new Error("Stakeholder was not found.");
+    }
+
+    const now = nowIso();
+    target.phoneVerificationStatus = channel === "WHATSAPP" ? "WHATSAPP_CHECKED" : "CALL_VERIFIED";
+    target.phoneVerifiedAt = now;
+    target.updatedAt = now;
+    target.lastVerificationError = null;
+    syncStakeholderContactVerification(database, target);
+
+    database.contactVerificationEvents.unshift({
+      id: randomUUID(),
+      stakeholderMasterId: target.id,
+      leadId: target.linkedLeadIds[0] ?? null,
+      siteId: target.linkedSiteIds[0] ?? null,
+      phone: target.phone,
+      channel,
+      provider: "manual",
+      status: "VERIFIED",
+      providerMessageId: null,
+      error: null,
+      requestedBy: user.id,
+      requestedAt: now,
+      verifiedAt: now,
+    });
+
+    logAudit(database, user, "StakeholderMaster", target.id, `${channel}_VERIFIED`, `Marked ${target.name} as verified by ${channel.toLowerCase()}.`);
+    return target;
+  });
+}
+
+export async function recordWhatsappVerificationReply(input: {
+  phone: string;
+  text: string;
+  provider: string;
+  providerMessageId?: string | null;
+  verified: boolean;
+  metadata?: Record<string, unknown>;
+}) {
+  const phone = input.phone.replace(/\D/g, "").slice(-10);
+  if (!/^[6-9]\d{9}$/.test(phone)) {
+    return { matched: false, verified: false, reason: "Invalid phone number." };
+  }
+
+  return updateDatabase((database) => {
+    database.contactVerificationEvents ??= [];
+    database.stakeholderMasters ??= [];
+    const target = database.stakeholderMasters.find((entry) => entry.phone === phone);
+    if (!target) {
+      return { matched: false, verified: false, reason: "No stakeholder matched this WhatsApp number." };
+    }
+
+    const now = nowIso();
+    const latestSentEvent = database.contactVerificationEvents.find(
+      (entry) => entry.stakeholderMasterId === target.id && entry.channel === "WHATSAPP" && entry.status === "SENT",
+    );
+
+    database.contactVerificationEvents.unshift({
+      id: randomUUID(),
+      stakeholderMasterId: target.id,
+      leadId: target.linkedLeadIds[0] ?? null,
+      siteId: target.linkedSiteIds[0] ?? null,
+      phone: target.phone,
+      channel: "WHATSAPP",
+      provider: input.provider,
+      status: input.verified ? "VERIFIED" : "RECEIVED",
+      providerMessageId: input.providerMessageId ?? null,
+      error: input.verified ? null : `Received WhatsApp reply "${input.text.slice(0, 80)}" without confirmation keyword.`,
+      requestedBy: "whatsapp-webhook",
+      requestedAt: now,
+      verifiedAt: input.verified ? now : null,
+      metadata: input.metadata,
+    });
+
+    if (input.verified) {
+      target.phoneVerificationStatus = "WHATSAPP_CHECKED";
+      target.phoneVerifiedAt = now;
+      target.lastWhatsappVerificationAt = now;
+      target.lastVerificationError = null;
+      if (latestSentEvent) {
+        latestSentEvent.status = "VERIFIED";
+        latestSentEvent.verifiedAt = now;
+        latestSentEvent.error = null;
+      }
+      logAudit(database, { id: "whatsapp-webhook", role: "MANAGER" } as User, "StakeholderMaster", target.id, "WHATSAPP_VERIFIED", `WhatsApp reply verified ${target.name}.`);
+    } else {
+      target.lastWhatsappVerificationAt = now;
+      target.lastVerificationError = `Received WhatsApp reply without confirmation keyword: ${input.text.slice(0, 80)}`;
+      logAudit(database, { id: "whatsapp-webhook", role: "MANAGER" } as User, "StakeholderMaster", target.id, "WHATSAPP_REPLY_RECEIVED", `Received WhatsApp reply from ${target.name}.`);
+    }
+
+    target.updatedAt = now;
+    syncStakeholderContactVerification(database, target);
+    return { matched: true, verified: input.verified, stakeholder: target };
+  });
+}
+
+function getDuplicateSiteMatch(database: Database, site: Pick<LeadSite, "id" | "leadId" | "latLng" | "siteName" | "stakeholders">) {
+  const siteName = site.siteName.trim().toLowerCase();
+  const stakeholderPhones = new Set(site.stakeholders.map((entry) => entry.phone).filter(Boolean));
+  let strongest: { site: LeadSite; strength: "WEAK" | "MODERATE" | "STRONG"; distance: number | null } | null = null;
+
+  for (const candidate of database.leadSites) {
+    if (candidate.id === site.id) {
+      continue;
+    }
+
+    const candidatePhones = new Set(candidate.stakeholders.map((entry) => entry.phone).filter(Boolean));
+    const sharesPhone = [...stakeholderPhones].some((phone) => candidatePhones.has(phone));
+    const sameName = siteName && candidate.siteName.trim().toLowerCase() === siteName;
+    const meters = site.latLng && candidate.latLng ? Math.round(distanceMeters(site.latLng, candidate.latLng)) : null;
+    const strength =
+      sharesPhone || (sameName && meters !== null && meters <= NEARBY_SITE_STRONG_MATCH_METERS)
+        ? "STRONG"
+        : meters !== null && meters <= NEARBY_SITE_MODERATE_MATCH_METERS
+          ? "MODERATE"
+          : sameName
+            ? "WEAK"
+            : null;
+
+    if (!strength) {
+      continue;
+    }
+
+    if (!strongest || strength === "STRONG" || (strength === "MODERATE" && strongest.strength === "WEAK")) {
+      strongest = { site: candidate, strength, distance: meters };
+    }
+  }
+
+  return strongest;
 }
 
 function getLeadContactSummary(stakeholders: StakeholderContact[]) {
@@ -1397,12 +2877,11 @@ export async function createSiteVisit(
   const detectedLatLng = input.detectedLatLng ?? metadataFallback?.latLng ?? null;
   const detectedAddress = `${input.photoWatermarkAddress || metadataFallback?.siteAddress || resolvedSiteAddress}`.trim();
   const visitedAt = input.photoCapturedAt ?? metadataFallback?.capturedAt ?? nowIso();
-  const resolvedLeadStage =
-    input.leadStage ??
-    suggestLeadStage({
-      expectedSupplyWindow: input.expectedSupplyWindow,
-      stakeholders,
-    });
+  // MOD-016/018: lead stage must be backend-calculated, not trusted from agent input.
+  const resolvedLeadStage = suggestLeadStage({
+    expectedSupplyWindow: input.expectedSupplyWindow,
+    stakeholders,
+  });
   const resolvedNextFollowUpAt =
     input.nextFollowUpAt ??
     suggestNextFollowUp({
@@ -1410,13 +2889,15 @@ export async function createSiteVisit(
       expectedSupplyWindow: input.expectedSupplyWindow,
     });
   const resolvedCurrentSupplier = normalizeCurrentSupplier(input.currentSupplier);
-  const resolvedScore =
-    input.score ??
-    suggestLeadScore({
-      expectedSupplyWindow: input.expectedSupplyWindow,
-      stakeholders,
-      currentSupplier: resolvedCurrentSupplier,
-    });
+  // MOD-016/018: lead score must be backend-calculated, not trusted from agent input.
+  const resolvedScore = suggestLeadScore({
+    expectedSupplyWindow: input.expectedSupplyWindow,
+    stakeholders,
+    currentSupplier: resolvedCurrentSupplier,
+  });
+  const arrivalPhotoHash = upload.fileBuffer
+    ? createHash("sha256").update(upload.fileBuffer).digest("hex")
+    : upload.photoUrl;
 
   if (isSiteMetadataMissingError({ siteId: input.siteId ?? null, siteAddress: resolvedSiteAddress })) {
     throw new Error("The site address could not be read from the GPS watermark. Upload a clearer GPS camera photo or choose an existing site.");
@@ -1488,9 +2969,27 @@ export async function createSiteVisit(
         createdAt: visitedAt,
         updatedAt: visitedAt,
         lastVisitedAt: visitedAt,
+        siteStatus: "ACTIVE",
+        closureReason: null,
+        closureRemarks: null,
+        closedBy: null,
+        closedAt: null,
+        closureApprovedBy: null,
+        closureApprovedAt: null,
+        reopenedBy: null,
+        reopenedAt: null,
+        reopenReason: null,
+        mergedIntoSiteId: null,
+        directionsLastUsedAt: null,
+        directionsUsageCount: 0,
+        lastDirectionsUsedBy: null,
       };
       database.leadSites.push(site);
     } else {
+      if (site.siteStatus === "DEAD" || site.siteStatus === "LOST" || site.siteStatus === "MERGED") {
+        throw new Error("This site is inactive. Ask manager to reopen or choose another active site.");
+      }
+
       site.siteName = input.siteName.trim() || site.siteName;
       site.siteAddress = resolvedSiteAddress || site.siteAddress;
       site.latLng = detectedLatLng ?? input.latLng ?? site.latLng ?? null;
@@ -1510,6 +3009,30 @@ export async function createSiteVisit(
       }
     }
 
+    const now = nowIso();
+    site.stakeholders = upsertStakeholderMasters(database, user, dedupeStakeholders(site.stakeholders), lead.id, site.id, now);
+    const duplicateMatch = getDuplicateSiteMatch(database, site);
+
+    const sameDaySessionIds = database.workdaySessions
+      .filter((entry) => entry.userId === user.id && entry.date === visitDateKey)
+      .map((entry) => entry.id);
+    const existingActiveVisit = database.siteVisits.find(
+      (entry) =>
+        sameDaySessionIds.includes(entry.sessionId) &&
+        entry.siteId === site.id &&
+        entry.activeVisitStatus !== "CANCELLED",
+    );
+    if (existingActiveVisit) {
+      throw new Error("A site visit for this agent, site, and captured date already exists. Add a manager-approved revisit reason instead of creating a duplicate visit.");
+    }
+
+    const foundNoOneRepeatCount = database.siteVisits.filter(
+      (entry) =>
+        entry.siteId === site.id &&
+        sameDaySessionIds.includes(entry.sessionId) &&
+        entry.contactPresenceStatus === "FOUND_NO_ONE",
+    ).length;
+
     const verification: { status: SiteLocationVerificationStatus; distanceMeters: number | null } =
       isNewSite || !input.siteId
         ? {
@@ -1520,6 +3043,19 @@ export async function createSiteVisit(
             savedLatLng: savedLatLngBeforeVisit,
             detectedLatLng,
           });
+    const gpsReviewStatus =
+      verification.status === "MATCHED" || verification.status === "NOT_APPLICABLE"
+        ? "AUTO_APPROVED"
+        : "PENDING_REVIEW";
+    const managerReviewReasons = [
+      gpsReviewStatus === "PENDING_REVIEW" ? `GPS ${verification.status}` : null,
+      duplicateMatch?.strength === "STRONG" ? `Strong duplicate candidate ${duplicateMatch.site.siteName}` : null,
+      !hasMeaningfulStakeholder(stakeholders) ? "No meaningful stakeholder met" : null,
+      foundNoOneRepeatCount >= 2 ? "Repeated Found No One entries for this site need manager review" : null,
+    ].filter((reason): reason is string => Boolean(reason));
+    const followUpTaskId = resolvedNextFollowUpAt
+      ? randomUUID()
+      : null;
 
     const visit: SiteVisit = {
       id: randomUUID(),
@@ -1549,6 +3085,29 @@ export async function createSiteVisit(
       photoWatermarkAddress: detectedAddress || null,
       locationVerificationStatus: verification.status,
       locationVerificationDistanceMeters: verification.distanceMeters,
+      capturedDate: toDateKey(visitedAt),
+      uploadDate: toDateKey(now),
+      isLateSync: toDateKey(visitedAt) !== toDateKey(now),
+      gpsReviewStatus,
+      gpsReviewNote: managerReviewReasons.join("; ") || null,
+      gpsReviewedBy: null,
+      gpsReviewedAt: null,
+      activeVisitStatus: "COMPLETED",
+      visitStartedAt: visitedAt,
+      visitCompletedAt: visitedAt,
+      cancelledAt: null,
+      cancelReason: null,
+      duplicateMatchStrength: duplicateMatch?.strength ?? "NONE",
+      duplicateMatchedSiteId: duplicateMatch?.site.id ?? null,
+      duplicateOverrideReason: null,
+      productivityTag: managerReviewReasons.length ? "SUSPICIOUS" : "PRODUCTIVE",
+      arrivalPhotoHash,
+      isPhotoReused: database.siteVisits.some((entry) => entry.arrivalPhotoHash && entry.arrivalPhotoHash === arrivalPhotoHash),
+      editHistory: [],
+      contactPresenceStatus: hasMeaningfulStakeholder(stakeholders) ? "PRESENT" : "FOUND_NO_ONE",
+      followUpTaskId,
+      managerReviewRequired: managerReviewReasons.length > 0,
+      managerReviewReason: managerReviewReasons.join("; ") || null,
     };
 
     lead.priceExpectation = input.priceExpectation?.trim() || lead.priceExpectation;
@@ -1556,6 +3115,18 @@ export async function createSiteVisit(
     lead.siteCount = database.leadSites.filter((entry) => entry.leadId === lead.id).length;
 
     database.siteVisits.unshift(visit);
+    if (followUpTaskId) {
+      database.tasks.unshift({
+        id: followUpTaskId,
+        plantId: lead.plantId,
+        subject: `Follow up: ${site.siteName}`,
+        explanation: `Auto follow-up from site visit on ${toDateKey(visitedAt)}. ${remarksText.slice(0, 160)}`,
+        deadline: resolvedNextFollowUpAt,
+        status: "OPEN",
+        assignedTo: user.id,
+        assignedBy: user.id,
+      });
+    }
     logAudit(database, user, "SiteVisit", visit.id, "CREATE", `Recorded site visit for ${site.siteName}.`);
     return visit;
   });
@@ -1589,11 +3160,28 @@ export async function updateSiteVisit(
       throw new Error("You can only edit your own site visit reports.");
     }
 
+    visit.editHistory ??= [];
+    const appendVisitEdit = (field: "REMARKS" | "STAGE" | "FOLLOW_UP" | "GRADE" | "QUANTITY", oldValue: string, newValue: string) => {
+      if (oldValue === newValue) {
+        return;
+      }
+      visit.editHistory?.push({
+        id: randomUUID(),
+        field,
+        oldValue,
+        newValue,
+        editedBy: user.id,
+        editedAt: nowIso(),
+        reason: "Agent updated submitted site visit.",
+      });
+    };
+
     if (typeof input.stageOfWork === "string") {
       const value = input.stageOfWork.trim();
       if (!value) {
         throw new Error("Stage of work cannot be empty.");
       }
+      appendVisitEdit("STAGE", visit.stageOfWork, value);
       visit.stageOfWork = value;
     }
 
@@ -1610,6 +3198,7 @@ export async function updateSiteVisit(
       if (!value) {
         throw new Error("Concrete grade cannot be empty.");
       }
+      appendVisitEdit("GRADE", visit.concreteGrade, value);
       visit.concreteGrade = value;
     }
 
@@ -1617,10 +3206,12 @@ export async function updateSiteVisit(
       if (!Number.isFinite(input.quantityCum) || input.quantityCum <= 0) {
         throw new Error("Quantity must be greater than zero.");
       }
+      appendVisitEdit("QUANTITY", String(visit.quantityCum), String(input.quantityCum));
       visit.quantityCum = input.quantityCum;
     }
 
     if (input.leadStage) {
+      appendVisitEdit("STAGE", visit.leadStage, input.leadStage);
       visit.leadStage = input.leadStage;
     }
 
@@ -1629,6 +3220,7 @@ export async function updateSiteVisit(
       if (Number.isNaN(date.getTime())) {
         throw new Error("Invalid follow-up date.");
       }
+      appendVisitEdit("FOLLOW_UP", visit.nextFollowUpAt, date.toISOString());
       visit.nextFollowUpAt = date.toISOString();
     }
 
@@ -1637,7 +3229,9 @@ export async function updateSiteVisit(
     }
 
     if (typeof input.remarksText === "string") {
-      visit.remarksText = input.remarksText.trim();
+      const value = input.remarksText.trim();
+      appendVisitEdit("REMARKS", visit.remarksText ?? "", value);
+      visit.remarksText = value;
     }
 
     const now = nowIso();
@@ -1756,8 +3350,14 @@ export async function updateLead(
       throw new Error("You can only update your own leads.");
     }
 
-    Object.assign(lead, input);
-    logAudit(database, user, "Lead", lead.id, "UPDATE", "Lead summary updated.");
+    const safeInput = { ...input };
+    if (user.role === "SALES_AGENT") {
+      delete safeInput.score;
+      delete safeInput.stage;
+    }
+
+    Object.assign(lead, safeInput);
+    logAudit(database, user, "Lead", lead.id, "UPDATE", "Lead summary updated with backend score/stage protection.");
     return lead;
   });
 }
@@ -1897,6 +3497,20 @@ function getNextInformalQuotationRef(database: Database, dateIso: string) {
   return `${prefix}${String(nextSequence).padStart(4, "0")}`;
 }
 
+function getNextSalesOrderRequestNumber(database: Database, dateIso: string) {
+  const financialYear = getFinancialYearLabel(dateIso);
+  const prefix = `SOR/${financialYear}/`;
+  const nextSequence =
+    database.salesOrderRequests
+      .map((entry) => entry.sorNumber ?? entry.internalReference)
+      .filter((ref): ref is string => Boolean(ref?.startsWith(prefix)))
+      .map((ref) => Number(ref.slice(prefix.length)))
+      .filter((sequence) => Number.isInteger(sequence) && sequence > 0)
+      .reduce((max, sequence) => Math.max(max, sequence), 0) + 1;
+
+  return `${prefix}${String(nextSequence).padStart(4, "0")}`;
+}
+
 function getInformalQuotationPdfFileName(request: InformalQuotationRequest) {
   const ref = request.quotationRef ?? request.id;
   return `quotation-${ref.replace(/[^a-zA-Z0-9-]/g, "-")}.pdf`;
@@ -1991,6 +3605,22 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
       throw new Error("A matching informal quotation request is already pending for this stakeholder.");
     }
 
+    const duplicateApprovedQuotation = database.informalQuotationRequests.find(
+      (entry) =>
+        entry.status === "APPROVED" &&
+        entry.siteId === site.id &&
+        entry.stakeholderPhone === stakeholder.phone &&
+        entry.items.map((item) => item.grade).join("|") === items.map((item) => item.grade).join("|") &&
+        entry.isExpired !== true,
+    );
+    const minimumRatePerCum = items.reduce((maxMinimum, item) => {
+      const benchmark = (database.priceBenchmarks ?? []).find(
+        (entry) => entry.plantId === site.plantId && entry.grade.trim().toUpperCase() === item.grade,
+      );
+      return Math.max(maxMinimum, benchmark ? Math.round(benchmark.sellingPricePerCum * 0.95) : 0);
+    }, 0);
+    const belowMinimumItem = minimumRatePerCum > 0 ? items.find((item) => item.pricePerCum < minimumRatePerCum) : null;
+
     const request: InformalQuotationRequest = {
       id: randomUUID(),
       leadId: lead.id,
@@ -2032,6 +3662,26 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
       whatsappError: null,
       createdBy: user.id,
       createdAt: nowIso(),
+      eligibilityChecked: true,
+      rateValidationStatus: belowMinimumItem ? "BELOW_MINIMUM" : minimumRatePerCum > 0 ? "VALID" : "NOT_CHECKED",
+      rateValidationNote: belowMinimumItem
+        ? `${belowMinimumItem.grade} rate ${belowMinimumItem.pricePerCum} is below minimum ${minimumRatePerCum}. Manager override required.`
+        : null,
+      minimumRatePerCum: minimumRatePerCum || null,
+      duplicateOfQuotationId: duplicateApprovedQuotation?.id ?? null,
+      revisionNumber: 1,
+      previousRevisionId: null,
+      latestRevisionId: null,
+      validityDate: null,
+      isExpired: false,
+      correctionStatus: "NONE",
+      correctionReason: null,
+      correctionRequestedBy: null,
+      correctionRequestedAt: null,
+      creditApprovalRequired: paymentType === "CREDIT",
+      creditApprovedBy: null,
+      creditApprovedAt: null,
+      deliveryChannels: [],
     };
 
     database.informalQuotationRequests.unshift(request);
@@ -2059,8 +3709,8 @@ export async function decideInformalQuotationRequest(
       throw new Error("This informal quotation request is already decided.");
     }
 
-    if (status !== "APPROVED" && status !== "REJECTED") {
-      throw new Error("Choose whether to approve or reject this informal quotation.");
+    if (status !== "APPROVED" && status !== "REJECTED" && status !== "CORRECTION_REQUESTED") {
+      throw new Error("Choose whether to approve, reject, or request correction for this informal quotation.");
     }
 
     if (
@@ -2070,12 +3720,50 @@ export async function decideInformalQuotationRequest(
       throw new Error("Upload and activate a quotation template before approving and releasing quotations.");
     }
 
+    if (status === "APPROVED" && request.rateValidationStatus === "BELOW_MINIMUM" && !decisionNote.trim()) {
+      throw new Error("Manager note is required when approving a quotation below the minimum rate.");
+    }
+
+    if (status === "CORRECTION_REQUESTED" && !decisionNote.trim()) {
+      throw new Error("Correction reason is required.");
+    }
+
     request.status = status;
     request.decisionNote = decisionNote.trim() || (status === "APPROVED" ? "Approved by manager." : "Rejected by manager.");
     request.decidedBy = user.id;
     request.decidedAt = nowIso();
+    if (status === "CORRECTION_REQUESTED") {
+      request.correctionStatus = "CORRECTION_REQUESTED";
+      request.correctionReason = decisionNote.trim();
+      request.correctionRequestedBy = user.id;
+      request.correctionRequestedAt = request.decidedAt;
+      logAudit(database, user, "InformalQuotationRequest", request.id, "CORRECTION_REQUESTED", request.correctionReason);
+      return request;
+    }
     if (status === "APPROVED" && !request.quotationRef) {
       request.quotationRef = getNextInformalQuotationRef(database, request.decidedAt);
+    }
+    if (status === "APPROVED") {
+      const validityDate = new Date(request.decidedAt);
+      validityDate.setDate(validityDate.getDate() + MIN_QUOTATION_VALID_DAYS);
+      request.validityDate = validityDate.toISOString();
+      request.isExpired = false;
+      request.correctionStatus = "NONE";
+      database.quotationRevisions ??= [];
+      const revisionId = randomUUID();
+      database.quotationRevisions.push({
+        id: revisionId,
+        quotationId: request.id,
+        revisionNumber: request.revisionNumber ?? 1,
+        correctionStatus: request.correctionStatus ?? "NONE",
+        correctionReason: request.correctionReason ?? null,
+        correctionRequestedBy: request.correctionRequestedBy ?? null,
+        correctionRequestedAt: request.correctionRequestedAt ?? null,
+        previousRevisionId: request.previousRevisionId ?? null,
+        createdBy: user.id,
+        createdAt: request.decidedAt,
+      });
+      request.latestRevisionId = revisionId;
     }
     logAudit(database, user, "InformalQuotationRequest", request.id, status, request.decisionNote);
     return request;
@@ -2193,6 +3881,8 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.emailCc = ccEmails;
       nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
       nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      nextRequest.deliveryChannels ??= [];
+      nextRequest.deliveryChannels.push({ channel: "EMAIL", sentAt: nextRequest.emailSentAt, sentBy: manager.id });
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_SENT", `Sent quotation email to ${request.stakeholderEmail}.`);
       return nextRequest;
     });
@@ -2272,6 +3962,10 @@ export async function createApprovalRequest(
       throw new Error("Select a saved site before raising a final approval request.");
     }
 
+    if (site.siteStatus === "DEAD" || site.siteStatus === "LOST" || site.siteStatus === "MERGED") {
+      throw new Error("Final approval can be raised only for an active site.");
+    }
+
     if (!input.customerName.trim()) {
       throw new Error("Client or customer name is required.");
     }
@@ -2295,6 +3989,28 @@ export async function createApprovalRequest(
     if (!input.castingType.trim()) {
       throw new Error("Casting type is required.");
     }
+
+    const now = nowIso();
+    const latestQuotation =
+      database.informalQuotationRequests
+        .filter((quotation) => quotation.status === "APPROVED" && quotation.siteId === site.id && quotation.isExpired !== true)
+        .sort((left, right) => compareIsoAsc(right.decidedAt ?? right.createdAt, left.decidedAt ?? left.createdAt))[0] ?? null;
+    const quotationValidityStatus =
+      !latestQuotation
+        ? "NOT_LINKED"
+        : latestQuotation.validityDate && compareIsoAsc(latestQuotation.validityDate, now) < 0
+          ? "EXPIRED"
+          : "VALID";
+    if (quotationValidityStatus === "EXPIRED") {
+      throw new Error("The linked quotation is expired. Request a revised quotation before final approval.");
+    }
+    const minimumRatePerCum = items.reduce((maxMinimum, item) => {
+      const benchmark = (database.priceBenchmarks ?? []).find(
+        (entry) => entry.plantId === site.plantId && entry.grade.trim().toUpperCase() === item.grade,
+      );
+      return Math.max(maxMinimum, benchmark ? Math.round(benchmark.sellingPricePerCum * 0.95) : 0);
+    }, 0);
+    const belowMinimum = minimumRatePerCum > 0 && items.some((item) => item.quotedPrice < minimumRatePerCum);
 
     const approval: ApprovalRequest = {
       id: randomUUID(),
@@ -2321,10 +4037,44 @@ export async function createApprovalRequest(
       decidedAt: null,
       decisionNote: null,
       createdBy: user.id,
-      createdAt: nowIso(),
+      createdAt: now,
+      linkedQuotationId: latestQuotation?.id ?? null,
+      linkedQuotationRevisionId: latestQuotation?.latestRevisionId ?? null,
+      quotationValidityStatus,
+      directFinalApprovalReason: latestQuotation ? null : "No approved informal quotation linked; manager must review direct final approval.",
+      routeFeasibilityStatus:
+        input.oneWayDistanceKm > 40 ? "NOT_FEASIBLE" : input.oneWayDistanceKm > 25 || input.trafficCount > 4 ? "MARGINAL" : "FEASIBLE",
+      variationNotes: latestQuotation ? null : "Direct final approval without quotation.",
+      minimumRatePerCum: minimumRatePerCum || null,
+      rateValidationStatus: belowMinimum ? "BELOW_MINIMUM" : minimumRatePerCum > 0 ? "VALID" : "NOT_CHECKED",
+      finalApprovalRecordId: null,
     };
+    const finalApprovalId = randomUUID();
+    approval.finalApprovalRecordId = finalApprovalId;
 
     database.approvalRequests.unshift(approval);
+    database.finalApprovals ??= [];
+    database.finalApprovals.unshift({
+      id: finalApprovalId,
+      quotationId: latestQuotation?.id ?? approval.id,
+      quotationRevisionId: latestQuotation?.latestRevisionId ?? null,
+      siteId: site.id,
+      leadId: lead.id,
+      status: "PENDING",
+      creditApprovalStatus: approval.paymentType === "CREDIT" ? "PENDING" : "NOT_REQUIRED",
+      variationNotes: approval.variationNotes ?? null,
+      distanceKm: approval.oneWayDistanceKm,
+      routeFeasibilityStatus: approval.routeFeasibilityStatus ?? "NOT_CHECKED",
+      materialScope: site.futureScope || approval.grade,
+      approvedBy: null,
+      approvedAt: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      rejectionReason: null,
+      lockedAt: null,
+      createdBy: user.id,
+      createdAt: now,
+    });
     logAudit(database, user, "ApprovalRequest", approval.id, "CREATE", `Created final price approval request for ${createApprovalAuditSummary(approval)}.`);
     return approval;
   });
@@ -2376,6 +4126,17 @@ export async function createSalesOrderRequest(
       throw new Error("Choose a valid required date.");
     }
 
+    const todayStart = new Date(toDateKey(nowIso()));
+    if (requiredDate < todayStart) {
+      throw new Error("Delivery date cannot be in the past. Choose a future date or request manager/accounting exception.");
+    }
+
+    const receiverPhone = normalizeStakeholderPhone(input.receiverPhone, "OTHERS");
+
+    if (input.priority === "URGENT" && !input.notes.trim()) {
+      throw new Error("Urgent orders require a reason in notes.");
+    }
+
     const paymentTerms = normalizePaymentTerms(approval.paymentType, approval.paymentTerms);
     if (requiresPaymentReceipt(approval.paymentType, paymentTerms) && !input.paymentReceivedConfirmed) {
       throw new Error("Confirm full payment receipt for advance-payment orders.");
@@ -2392,7 +4153,40 @@ export async function createSalesOrderRequest(
       throw new Error("Confirm GST legal name and billing address before submitting a GST sales order.");
     }
 
+    const duplicateOpenRequest = database.salesOrderRequests.find(
+      (entry) =>
+        entry.id !== approval.id &&
+        entry.siteId === site.id &&
+        entry.grade === approvalItem.grade &&
+        entry.status !== "FINANCE_REJECTED" &&
+        entry.status !== "SCHEDULE_REJECTED" &&
+        entry.remainingQuantity > 0,
+    );
+    if (duplicateOpenRequest && duplicateOpenRequest.status === "SCHEDULE_APPROVED") {
+      throw new Error("This site already has open approved quantity. Use Add Schedule until remaining quantity is exhausted.");
+    }
+
     const amount = computeSalesOrderAmount(quantity, approvalItem.quotedPrice, input.pumpRequired);
+    const now = nowIso();
+    const sorNumber = getNextSalesOrderRequestNumber(database, now);
+    const attachmentVersions = [input.poDocumentUrl, input.pdcDocumentUrl, input.gstCertificateUrl]
+      .filter((url): url is string => Boolean(url))
+      .map((url, index) => ({
+        url,
+        version: index + 1,
+        uploadedAt: now,
+        uploadedBy: user.id,
+        superseded: false,
+      }));
+    const odooPreflight = gstin && !isOdooConfigured() ? "MANUAL_FALLBACK" : "READY";
+    const preliminaryMixDesignStatus = (database.mixDesigns ?? []).some(
+      (design) =>
+        design.plantId === (lead.plantId ?? getUserPlantId(database, user.id)) &&
+        design.grade === approvalItem.grade.toUpperCase().trim() &&
+        design.isActive,
+    )
+      ? "READY"
+      : "PENDING";
     const orderRequest: SalesOrderRequest = {
       id: randomUUID(),
       leadId: lead.id,
@@ -2415,7 +4209,7 @@ export async function createSalesOrderRequest(
       mixDesignId: null,
       slump: input.slump.trim(),
       receiverName: input.receiverName.trim(),
-      receiverPhone: input.receiverPhone.trim(),
+      receiverPhone,
       poDocumentUrl: input.poDocumentUrl,
       pdcDocumentUrl: input.pdcDocumentUrl,
       gstin: gstin || null,
@@ -2488,8 +4282,44 @@ export async function createSalesOrderRequest(
       scheduleDecidedAt: null,
       scheduleNote: null,
       createdBy: user.id,
-      createdAt: nowIso(),
+      createdAt: now,
+      sorNumber,
+      isDuplicateRequest: Boolean(duplicateOpenRequest),
+      duplicateOfOrderId: duplicateOpenRequest?.id ?? null,
+      financeRejectionReason: null,
+      financeRejectionHistory: [],
+      correctionResubmittedAt: null,
+      correctionResubmittedBy: null,
+      odooPreflight,
+      odooPreflightError: odooPreflight === "MANUAL_FALLBACK" ? "Odoo is not configured; manual fallback required." : null,
+      preliminaryMixDesignStatus,
+      postFinanceLocked: false,
+      postFinanceLockedAt: null,
+      internalReference: sorNumber,
+      revisionType: duplicateOpenRequest ? "SCHEDULE" : "NEW",
+      deliveryDateValidated: true,
+      isUrgent: input.priority === "URGENT",
+      urgentReason: input.priority === "URGENT" ? input.notes.trim() : null,
+      receiverPhoneValidated: true,
+      plantLockedAt: null,
+      plantChangeApprovedBy: null,
+      plantChangeReason: null,
+      orderQuantity: quantity,
+      attachmentVersions,
+      fulfillmentStatus: "OPEN",
+      isOpenVolume: false,
+      parentOrderId: duplicateOpenRequest?.id ?? null,
+      childOrderIds: [],
+      cancelledAt: null,
+      cancelledBy: null,
+      cancellationReason: null,
+      editHistory: [],
     };
+
+    if (duplicateOpenRequest) {
+      duplicateOpenRequest.childOrderIds ??= [];
+      duplicateOpenRequest.childOrderIds.push(orderRequest.id);
+    }
 
     database.salesOrderRequests.unshift(orderRequest);
     logAudit(
@@ -2504,7 +4334,75 @@ export async function createSalesOrderRequest(
   });
 }
 
+export async function reviseSalesOrderQuantity(
+  user: User,
+  orderId: string,
+  input: { revisedQuantity: number; reason: string },
+) {
+  assertRole(user, ["SALES_AGENT", "MANAGER", "ACCOUNTING"]);
+
+  const revisedQuantity = Math.round(Number(input.revisedQuantity) * 10) / 10;
+  const reason = input.reason.trim();
+
+  if (!Number.isFinite(revisedQuantity) || revisedQuantity <= 0) {
+    throw new Error("Revised quantity must be greater than zero.");
+  }
+  if (!reason) {
+    throw new Error("Quantity revision reason is required.");
+  }
+
+  return updateDatabase((database) => {
+    const order = database.salesOrderRequests.find((entry) => entry.id === orderId);
+    if (!order) {
+      throw new Error("Sales order request not found.");
+    }
+    if (user.role === "SALES_AGENT" && order.createdBy !== user.id) {
+      throw new Error("You can only revise your own sales order request.");
+    }
+    if (order.fulfillmentStatus === "FULLY_FULFILLED" || order.remainingQuantity <= 0) {
+      throw new Error("Fully fulfilled sales orders cannot be revised. Create a new order for the next requirement.");
+    }
+
+    const dispatchedQuantity = Math.max(0, Math.round((order.quantity - order.remainingQuantity) * 10) / 10);
+    if (revisedQuantity < dispatchedQuantity) {
+      throw new Error(`Revised quantity cannot be less than already dispatched quantity (${dispatchedQuantity} CUM).`);
+    }
+
+    const oldQuantity = order.quantity;
+    const quantityDifference = Math.round((revisedQuantity - oldQuantity) * 10) / 10;
+    const now = nowIso();
+
+    order.quantity = revisedQuantity;
+    order.orderQuantity = revisedQuantity;
+    order.remainingQuantity = Math.round((order.remainingQuantity + quantityDifference) * 10) / 10;
+    order.amount = computeSalesOrderAmount(revisedQuantity, order.approvedPrice, order.pumpRequired);
+    order.revisionType = "REVISION";
+    order.internalReference = order.internalReference ?? order.sorNumber ?? order.id;
+    order.editHistory ??= [];
+    order.editHistory.push({
+      field: "quantity",
+      oldValue: String(oldQuantity),
+      newValue: String(revisedQuantity),
+      changedBy: user.id,
+      changedAt: now,
+      reason,
+    });
+    order.fulfillmentStatus = order.remainingQuantity <= 0 ? "FULLY_FULFILLED" : dispatchedQuantity > 0 ? "PARTIALLY_FULFILLED" : "OPEN";
+
+    logAudit(
+      database,
+      user,
+      "SalesOrderRequest",
+      order.id,
+      "QUANTITY_REVISION",
+      `Revised sales order quantity from ${oldQuantity} CUM to ${revisedQuantity} CUM. Reason: ${reason}.`,
+    );
+    return order;
+  });
+}
+
 type FinanceReviewInput = {
+  financeRejectionReason?: SalesOrderRequest["financeRejectionReason"];
   financeChecklist?: Partial<{
     gstChecked: boolean;
     gstCertificateChecked: boolean;
@@ -2697,10 +4595,29 @@ export async function reviewSalesOrderRequestByAccounting(
       assertFinanceApprovalSafeguards(database, request);
     }
 
+    if (status === "FINANCE_REJECTED" && !input?.financeRejectionReason && !note.trim()) {
+      throw new Error("Finance rejection requires a structured reason or note.");
+    }
+
     request.status = status;
     request.financeReviewedBy = user.id;
     request.financeReviewedAt = nowIso();
     request.financeNote = note || request.financeChecklist?.accountantRemarks || "";
+    if (status === "FINANCE_REJECTED") {
+      request.financeRejectionReason = input?.financeRejectionReason ?? "OTHER";
+      request.financeRejectionHistory ??= [];
+      request.financeRejectionHistory.push({
+        reason: request.financeRejectionReason,
+        note: request.financeNote || "Finance rejected request.",
+        rejectedBy: user.id,
+        rejectedAt: request.financeReviewedAt,
+      });
+    }
+    if (status === "FINANCE_VERIFIED") {
+      request.postFinanceLocked = true;
+      request.postFinanceLockedAt = request.financeReviewedAt;
+      request.plantLockedAt = request.financeReviewedAt;
+    }
     if (status === "FINANCE_VERIFIED" && (request.gstin || request.gstCertificateUrl)) {
       request.gstVerificationStatus = "VERIFIED";
       request.gstVerifiedBy = user.id;
@@ -3186,10 +5103,35 @@ export async function decideApprovalRequest(
       throw new Error("Approval request not found.");
     }
 
+    if (
+      status === "APPROVED" &&
+      (approval.rateValidationStatus === "BELOW_MINIMUM" || approval.routeFeasibilityStatus === "MARGINAL" || approval.routeFeasibilityStatus === "NOT_FEASIBLE") &&
+      !decisionNote.trim()
+    ) {
+      throw new Error("Manager note is required for below-minimum rate or route feasibility exceptions.");
+    }
+
     approval.status = status;
     approval.decisionNote = decisionNote;
     approval.decidedAt = nowIso();
     approval.decidedBy = user.id;
+    if (status === "APPROVED" && approval.rateValidationStatus === "BELOW_MINIMUM") {
+      approval.rateValidationStatus = "OVERRIDE_APPROVED";
+    }
+    const finalApproval = database.finalApprovals?.find((entry) => entry.id === approval.finalApprovalRecordId);
+    if (finalApproval) {
+      finalApproval.status = status === "APPROVED" ? "APPROVED" : "REJECTED";
+      if (status === "APPROVED") {
+        finalApproval.approvedBy = user.id;
+        finalApproval.approvedAt = approval.decidedAt;
+        finalApproval.lockedAt = approval.decidedAt;
+        finalApproval.creditApprovalStatus = approval.paymentType === "CREDIT" ? "APPROVED" : "NOT_REQUIRED";
+      } else {
+        finalApproval.rejectedBy = user.id;
+        finalApproval.rejectedAt = approval.decidedAt;
+        finalApproval.rejectionReason = decisionNote || "Rejected by manager.";
+      }
+    }
     logAudit(database, user, "ApprovalRequest", approval.id, status, decisionNote || "Approval decision updated.");
     return approval;
   });
@@ -3213,10 +5155,22 @@ export async function resolveVerification(user: User, readingId: string, manualV
       throw new Error("Odometer reading not found.");
     }
 
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (session) {
+      const lock = getOdometerLockStatus(database, session.userId, session.date);
+      if (lock.status === "PAID_LOCKED") {
+        throw new Error("Paid reimbursement dates cannot be directly modified. Create an adjustment request outside the original paid claim.");
+      }
+    }
+
     reading.finalValue = manualValue;
+    reading.managerFinalReading = manualValue;
     reading.status = "MANUAL_VERIFIED";
     reading.verifiedBy = user.id;
     reading.verificationNote = note;
+    reading.managerReviewedAt = nowIso();
+    reading.managerRemark = note;
+    reading.reviewReason = null;
     logAudit(database, user, "OdometerReading", reading.id, "MANUAL_VERIFY", note || "Manager entered manual reading.");
     return reading;
   });
@@ -3339,6 +5293,7 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
     informalQuotationRequests: [],
     salesOrderRequests: [],
     reimbursementClaims: [],
+    reimbursementAdjustments: [],
     tasks: [],
     helpRequests: [],
     targets: [],
@@ -3353,6 +5308,12 @@ function createDashboardDatabaseSlice(input: Partial<Database>): Database {
     dispatchRecords: [],
     commissionVouchers: [],
     customerLedgerEntries: [],
+    // MOD additions
+    contactVerificationEvents: [],
+    stakeholderMasters: [],
+    odometerCorrections: [],
+    quotationRevisions: [],
+    finalApprovals: [],
     ...input,
   };
 }
@@ -3657,9 +5618,13 @@ export async function getAgentDashboardData(user: User, options: AgentDashboardR
     reimbursementClaims: database.reimbursementClaims
       .filter((entry) => entry.agentId === user.id)
       .sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
+    reimbursementAdjustments: (database.reimbursementAdjustments ?? [])
+      .filter((entry) => entry.agentId === user.id)
+      .sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
     targets: database.targets.filter((entry) => entry.userId === user.id && entry.month === monthKey),
     helpRequests: database.helpRequests.filter((entry) => entry.agentId === user.id),
     reimbursementSummaries,
+    siteMapMarkers: buildSiteMapMarkers(database, user),
     pipelineQuantity,
     approvedQuantity,
   };
@@ -3678,12 +5643,15 @@ export async function getManagerDashboardData(user: User): Promise<ManagerDashbo
     odometerReadings: database.odometerReadings,
     verificationQueue,
     siteVisits: database.siteVisits,
+    leadSites: sortLeadSites(database.leadSites),
+    siteMapMarkers: buildSiteMapMarkers(database, user),
     workdaySessions: database.workdaySessions,
     leads: sortLeads(database.leads),
     approvals: database.approvalRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     informalQuotationRequests: database.informalQuotationRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     salesOrderRequests: database.salesOrderRequests.sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),
     reimbursementClaims: database.reimbursementClaims.sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
+    reimbursementAdjustments: [...(database.reimbursementAdjustments ?? [])].sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
     helpRequests: database.helpRequests,
     tasks: database.tasks,
     targets: database.targets,
@@ -3707,6 +5675,7 @@ export async function getAccountingDashboardData(user: User): Promise<Accounting
     plants: database.plants,
     reimbursements: computeReimbursementSummaries(database),
     reimbursementClaims: [...database.reimbursementClaims].sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
+    reimbursementAdjustments: [...(database.reimbursementAdjustments ?? [])].sort((left, right) => compareIsoAsc(right.requestedAt, left.requestedAt)),
     tasks: database.tasks,
     approvals: database.approvalRequests,
     salesOrderRequests: [...database.salesOrderRequests].sort((left, right) => compareIsoAsc(right.createdAt, left.createdAt)),

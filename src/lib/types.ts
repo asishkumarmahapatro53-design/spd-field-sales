@@ -8,10 +8,50 @@ export type ReadingStatus =
   | "AWAITING_CONFIRMATION"
   | "CONFIRMED"
   | "MANUAL_REVIEW_REQUIRED"
-  | "MANUAL_VERIFIED";
-export type LeadStage = "TALKS" | "NEGOTIATING" | "FINALIZED" | "MISSED";
+  | "MANUAL_VERIFIED"
+  | "DISCARDED";
+// MOD-001: Reason the agent discarded an odometer upload
+export type OdometerDiscardReason = "WRONG_PHOTO" | "BLURRY" | "WRONG_DATE" | "RETAKE" | "OTHER";
+// MOD-007: Day completeness status
+export type OdometerDayStatus = "COMPLETE" | "INCOMPLETE_START" | "INCOMPLETE_END" | "INCOMPLETE_BOTH" | "EXCEPTION_APPROVED";
+// MOD-010: Correction entry type
+export type OdometerCorrectionType = "READING_UPDATE" | "REOPEN" | "REIMBURSEMENT_ADJUSTMENT";
+export type OdometerLockStatus = "OPEN" | "CLAIMED" | "PAID_LOCKED" | "HISTORICAL_LOCKED" | "REOPENED_FOR_CORRECTION";
+// MOD-012: Continuity check result
+export type OdometerContinuityStatus = "OK" | "GAP" | "REVERSAL" | "EXCEPTION_APPROVED";
+// MOD-013: Upload source type
+export type OdometerUploadSource = "LIVE" | "PAST" | "BATCH" | "CORRECTION";
+// MOD-006: Batch upload status
+export type BatchUploadStatus = "PENDING_REVIEW" | "ACCEPTED" | "REJECTED";
+export type LeadStage = "TALKS" | "NEGOTIATING" | "FINALIZED" | "MISSED" | "DEAD" | "LOST";
+// MOD-022: Site-level status separate from lead
+export type SiteStatus = "ACTIVE" | "DEAD" | "LOST" | "CONVERTED" | "MERGED";
+// MOD-017: Active visit tracking
+export type ActiveVisitStatus = "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+// MOD-016: Phone verification status
+export type PhoneVerificationStatus =
+  | "UNVERIFIED"
+  | "CALL_INITIATED"
+  | "CALL_VERIFIED"
+  | "WHATSAPP_SENT"
+  | "WHATSAPP_CHECKED"
+  | "VERIFIED"
+  | "INVALID"
+  | "FAILED";
+export type ContactVerificationChannel = "CALL" | "WHATSAPP";
+export type ContactVerificationStatus = "PENDING_CONFIGURATION" | "SENT" | "RECEIVED" | "VERIFIED" | "FAILED";
+// MOD-018: Duplicate detection confidence
+export type DuplicateMatchStrength = "NONE" | "WEAK" | "MODERATE" | "STRONG";
+// MOD-019: Visit edit type for audit
+export type VisitEditType = "REMARKS" | "TRANSCRIPTION" | "STAGE" | "FOLLOW_UP" | "GRADE" | "QUANTITY";
+// MOD-021: Contact presence at visit
+export type ContactPresenceStatus = "PRESENT" | "NOT_PRESENT" | "FOUND_NO_ONE";
+// MOD-018: Visit productivity tag
+export type VisitProductivityTag = "PRODUCTIVE" | "LOW_QUALITY" | "SUSPICIOUS" | "FOLLOW_UP_NEEDED";
 export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
-export type InformalQuotationStatus = "PENDING" | "APPROVED" | "REJECTED";
+// MOD-026: Final approval workflow status
+export type FinalApprovalStatus = "PENDING" | "APPROVED" | "REJECTED" | "CORRECTION_REQUESTED" | "LOCKED";
+export type InformalQuotationStatus = "PENDING" | "APPROVED" | "REJECTED" | "CORRECTION_REQUESTED" | "EXPIRED";
 export type InformalQuotationPriceType = "GST_INCLUSIVE" | "NON_GST";
 export type InformalQuotationPaymentType = "ADVANCE" | "CREDIT";
 export type InformalQuotationPdfStatus = "NOT_GENERATED" | "GENERATED" | "FAILED";
@@ -62,6 +102,8 @@ export type ReimbursementClaimStatus =
   | "REQUESTED"
   | "REJECTED";
 export type ReimbursementPaymentMode = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "BANK_TRANSFER";
+export type ReimbursementAdjustmentType = "EXTRA_PAYABLE" | "RECOVERY";
+export type ReimbursementAdjustmentStatus = "PENDING_ACCOUNTING_APPROVAL" | "APPROVED" | "REJECTED" | "SETTLED";
 export type PaymentVerificationMode = "CASH" | "CHEQUE" | "NEFT" | "UPI" | "BANK_TRANSFER";
 export type LedgerDecisionStatus =
   | "GST_CLIENT_ODOO_LEDGER"
@@ -84,6 +126,23 @@ export type StakeholderRole =
   | "FOUND_NO_ONE";
 export type ExpectedSupplyWindow = "WITHIN_7_DAYS" | "WITHIN_15_DAYS" | "WITHIN_30_DAYS" | "MORE_THAN_30_DAYS";
 export type SiteLocationVerificationStatus = "NOT_APPLICABLE" | "MATCHED" | "OUT_OF_RANGE" | "PHOTO_COORDS_MISSING" | "SAVED_COORDS_MISSING";
+// MOD-024/025: Quotation revision/correction tracking
+export type QuotationCorrectionStatus = "NONE" | "CORRECTION_REQUESTED" | "CORRECTED";
+// MOD-027: Sales Order Request extended statuses
+export type SalesOrderRequestFinanceRejectionReason =
+  | "PO_MISSING"
+  | "GST_INVALID"
+  | "CREDIT_EXCEEDED"
+  | "PAYMENT_NOT_RECEIVED"
+  | "DUPLICATE_REQUEST"
+  | "INCOMPLETE_DETAILS"
+  | "OTHER";
+// MOD-028: Sales order internal reference pattern
+export type SalesOrderRevisionType = "NEW" | "SCHEDULE" | "REVISION" | "CANCELLATION";
+// MOD-029: Order fulfillment status
+export type OrderFulfillmentStatus = "OPEN" | "PARTIALLY_FULFILLED" | "FULLY_FULFILLED" | "CANCELLED";
+// MOD-030: Map pin color used by agent lead map
+export type MapPinColor = "GREEN" | "YELLOW" | "ORANGE" | "RED" | "GRAY" | "BLUE";
 
 export interface LatLng {
   lat: number;
@@ -99,6 +158,7 @@ export interface User {
   homePlantId: string | null;
   email: string | null;
   passwordHash: string;
+  lastReimbursementClosedDate?: string | null;
 }
 
 export interface AuthSession {
@@ -135,6 +195,55 @@ export interface OdometerReading {
   status: ReadingStatus;
   verifiedBy: string | null;
   verificationNote: string | null;
+  // MOD-001: Agent manual reading entry + OCR comparison
+  agentEnteredReading?: number | null;
+  readingDifference?: number | null;
+  managerFinalReading?: number | null;
+  // MOD-001: Discard flow — old uploads are never deleted, just marked discarded
+  discardedAt?: string | null;
+  discardedBy?: string | null;
+  discardReason?: OdometerDiscardReason | null;
+  discardNote?: string | null;
+  replacedByReadingId?: string | null;
+  replacesReadingId?: string | null;
+  // MOD-002: GPS watermark metadata
+  gpsWatermarkText?: string | null;
+  gpsCapturedDate?: string | null;
+  gpsCapturedLocation?: string | null;
+  gpsAccuracy?: number | null;
+  // MOD-003: Upload metadata & audit
+  uploadedBy?: string | null;
+  uploadDateTime?: string | null;
+  uploadSource?: OdometerUploadSource;
+  fileSizeBytes?: number | null;
+  // MOD-004: Duplicate image detection
+  imageHash?: string | null;
+  duplicateOfReadingId?: string | null;
+  duplicateWarningAcknowledgedBy?: string | null;
+  duplicateWarningAcknowledgedAt?: string | null;
+  // MOD-005: Uniqueness — only one accepted START and END per agent per day
+  isActiveReading?: boolean;
+  // MOD-010: Correction versioning
+  correctionVersion?: number;
+  previousReadingValue?: number | null;
+  correctionReason?: string | null;
+  correctionApprovedBy?: string | null;
+  correctionApprovedAt?: string | null;
+  // MOD-011: Watermark/GPS missing status
+  hasGpsWatermark?: boolean;
+  watermarkStatus?: "PRESENT" | "MISSING" | "UNREADABLE";
+  // MOD-012: Continuity check result
+  continuityStatus?: OdometerContinuityStatus;
+  continuityNote?: string | null;
+  // MOD-013: Manager review reason
+  reviewReason?: string | null;
+  managerReviewRequiredAt?: string | null;
+  managerReviewedAt?: string | null;
+  managerRemark?: string | null;
+  lockStatus?: OdometerLockStatus;
+  reopenedForCorrectionBy?: string | null;
+  reopenedForCorrectionAt?: string | null;
+  reopenedForCorrectionReason?: string | null;
 }
 
 export interface StakeholderContact {
@@ -142,6 +251,30 @@ export interface StakeholderContact {
   name: string;
   phone: string;
   role?: StakeholderRole;
+  // MOD-021/023: Phone verification
+  phoneVerificationStatus?: PhoneVerificationStatus;
+  phoneVerifiedAt?: string | null;
+  // MOD-023: Stakeholder master link
+  stakeholderMasterId?: string | null;
+  // MOD-021: Contact presence
+  contactPresence?: ContactPresenceStatus;
+}
+
+export interface ContactVerificationEvent {
+  id: string;
+  stakeholderMasterId: string;
+  leadId: string | null;
+  siteId: string | null;
+  phone: string;
+  channel: ContactVerificationChannel;
+  provider: string;
+  status: ContactVerificationStatus;
+  providerMessageId: string | null;
+  error: string | null;
+  requestedBy: string;
+  requestedAt: string;
+  verifiedAt: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface LeadSite {
@@ -161,6 +294,23 @@ export interface LeadSite {
   createdAt: string;
   updatedAt: string;
   lastVisitedAt: string;
+  // MOD-022: Site-level status management
+  siteStatus?: SiteStatus;
+  closureReason?: string | null;
+  closureRemarks?: string | null;
+  closedBy?: string | null;
+  closedAt?: string | null;
+  closureApprovedBy?: string | null;
+  closureApprovedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenReason?: string | null;
+  // MOD-022: Merged site tracking
+  mergedIntoSiteId?: string | null;
+  // MOD-020: Get directions link
+  directionsLastUsedAt?: string | null;
+  directionsUsageCount?: number;
+  lastDirectionsUsedBy?: string | null;
 }
 
 export interface SiteVisit {
@@ -191,6 +341,38 @@ export interface SiteVisit {
   photoWatermarkAddress?: string | null;
   locationVerificationStatus?: SiteLocationVerificationStatus;
   locationVerificationDistanceMeters?: number | null;
+  // MOD-015: Captured date mapping — visit date from GPS, not upload date
+  capturedDate?: string | null;
+  uploadDate?: string | null;
+  isLateSync?: boolean;
+  // MOD-016: GPS review status
+  gpsReviewStatus?: "AUTO_APPROVED" | "PENDING_REVIEW" | "MANAGER_APPROVED" | "MANAGER_REJECTED";
+  gpsReviewNote?: string | null;
+  gpsReviewedBy?: string | null;
+  gpsReviewedAt?: string | null;
+  // MOD-017: Active visit tracking
+  activeVisitStatus?: ActiveVisitStatus;
+  visitStartedAt?: string | null;
+  visitCompletedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
+  // MOD-018: Duplicate detection
+  duplicateMatchStrength?: DuplicateMatchStrength;
+  duplicateMatchedSiteId?: string | null;
+  duplicateOverrideReason?: string | null;
+  // MOD-018: Visit productivity tag
+  productivityTag?: VisitProductivityTag;
+  // MOD-018: Photo reuse detection
+  arrivalPhotoHash?: string | null;
+  isPhotoReused?: boolean;
+  // MOD-019: Edit audit trail
+  editHistory?: VisitEditHistoryEntry[];
+  // MOD-021: Contact presence
+  contactPresenceStatus?: ContactPresenceStatus;
+  // MOD-018: Follow-up task auto-creation
+  followUpTaskId?: string | null;
+  managerReviewRequired?: boolean;
+  managerReviewReason?: string | null;
 }
 
 export interface Lead {
@@ -215,6 +397,19 @@ export interface Lead {
   primarySiteId?: string | null;
   primarySiteLatLng?: LatLng | null;
   siteCount?: number;
+  // MOD-019/022: Lead closure
+  closureReason?: string | null;
+  closureRemarks?: string | null;
+  closedBy?: string | null;
+  closedAt?: string | null;
+  closureApprovedBy?: string | null;
+  closureApprovedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenReason?: string | null;
+  closureStatus?: "OPEN" | "PENDING_MANAGER_APPROVAL" | "APPROVED_CLOSED" | "REJECTED";
+  closureRequestedBy?: string | null;
+  closureRequestedAt?: string | null;
 }
 
 export interface ApprovalRequestItem {
@@ -249,6 +444,15 @@ export interface ApprovalRequest {
   decisionNote: string | null;
   createdBy: string;
   createdAt: string;
+  linkedQuotationId?: string | null;
+  linkedQuotationRevisionId?: string | null;
+  quotationValidityStatus?: "VALID" | "EXPIRED" | "NOT_LINKED";
+  directFinalApprovalReason?: string | null;
+  routeFeasibilityStatus?: "FEASIBLE" | "MARGINAL" | "NOT_FEASIBLE" | "NOT_CHECKED";
+  variationNotes?: string | null;
+  minimumRatePerCum?: number | null;
+  rateValidationStatus?: "VALID" | "BELOW_MINIMUM" | "OVERRIDE_APPROVED" | "NOT_CHECKED";
+  finalApprovalRecordId?: string | null;
 }
 
 export interface InformalQuotationLineItem {
@@ -301,6 +505,30 @@ export interface InformalQuotationRequest {
   whatsappError: string | null;
   createdBy: string;
   createdAt: string;
+  // MOD-024: Pre-eligibility & validation
+  eligibilityChecked?: boolean;
+  rateValidationStatus?: "VALID" | "BELOW_MINIMUM" | "OVERRIDE_APPROVED" | "NOT_CHECKED";
+  rateValidationNote?: string | null;
+  minimumRatePerCum?: number | null;
+  // MOD-024: Duplicate quotation detection
+  duplicateOfQuotationId?: string | null;
+  // MOD-025: Versioning
+  revisionNumber?: number;
+  previousRevisionId?: string | null;
+  latestRevisionId?: string | null;
+  validityDate?: string | null;
+  isExpired?: boolean;
+  // MOD-025: Correction flow
+  correctionStatus?: QuotationCorrectionStatus;
+  correctionReason?: string | null;
+  correctionRequestedBy?: string | null;
+  correctionRequestedAt?: string | null;
+  // MOD-025: Credit payment terms
+  creditApprovalRequired?: boolean;
+  creditApprovedBy?: string | null;
+  creditApprovedAt?: string | null;
+  // MOD-025: Delivery channel audit
+  deliveryChannels?: Array<{ channel: string; sentAt: string; sentBy: string }>;
 }
 
 export interface Task {
@@ -527,6 +755,40 @@ export interface SalesOrderRequest {
   scheduleNote: string | null;
   createdBy: string;
   createdAt: string;
+  // MOD-027: Sales Order Request improvements
+  sorNumber?: string | null;
+  isDuplicateRequest?: boolean;
+  duplicateOfOrderId?: string | null;
+  financeRejectionReason?: SalesOrderRequestFinanceRejectionReason | null;
+  financeRejectionHistory?: Array<{ reason: SalesOrderRequestFinanceRejectionReason; note: string; rejectedBy: string; rejectedAt: string }>;
+  correctionResubmittedAt?: string | null;
+  correctionResubmittedBy?: string | null;
+  odooPreflight?: "PENDING" | "READY" | "FAILED" | "MANUAL_FALLBACK";
+  odooPreflightError?: string | null;
+  preliminaryMixDesignStatus?: "NOT_REQUIRED" | "PENDING" | "READY" | "NOT_AVAILABLE";
+  postFinanceLocked?: boolean;
+  postFinanceLockedAt?: string | null;
+  // MOD-028: Sales Order Management
+  internalReference?: string | null;
+  revisionType?: SalesOrderRevisionType;
+  deliveryDateValidated?: boolean;
+  isUrgent?: boolean;
+  urgentReason?: string | null;
+  receiverPhoneValidated?: boolean;
+  plantLockedAt?: string | null;
+  plantChangeApprovedBy?: string | null;
+  plantChangeReason?: string | null;
+  orderQuantity?: number;
+  attachmentVersions?: Array<{ url: string; version: number; uploadedAt: string; uploadedBy: string; superseded: boolean }>;
+  // MOD-029: Order continuity & fulfillment
+  fulfillmentStatus?: OrderFulfillmentStatus;
+  isOpenVolume?: boolean;
+  parentOrderId?: string | null;
+  childOrderIds?: string[];
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+  cancellationReason?: string | null;
+  editHistory?: Array<{ field: string; oldValue: string; newValue: string; changedBy: string; changedAt: string; reason: string }>;
 }
 
 /** Recipe for a concrete grade. One grade can have multiple versions per plant. */
@@ -672,6 +934,33 @@ export interface ReimbursementClaim {
   note: string | null;
 }
 
+export interface ReimbursementAdjustmentEntry {
+  id: string;
+  agentId: string;
+  workdayDate: string;
+  originalClaimId: string;
+  correctionRequestId: string;
+  readingId: string;
+  readingType: ReadingType;
+  originalDistanceKm: number;
+  correctedDistanceKm: number;
+  distanceDifferenceKm: number;
+  originalAmount: number;
+  correctedAmount: number;
+  adjustmentAmount: number;
+  adjustmentType: ReimbursementAdjustmentType;
+  status: ReimbursementAdjustmentStatus;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  settledInClaimId: string | null;
+  settledBy: string | null;
+  settledAt: string | null;
+  remark: string | null;
+}
+
 export interface FinanceVerificationChecklist {
   gstChecked: boolean;
   gstCertificateChecked: boolean;
@@ -743,6 +1032,132 @@ export interface AuditLogEntry {
   createdAt: string;
 }
 
+// MOD-019: Visit edit audit trail entry
+export interface VisitEditHistoryEntry {
+  id: string;
+  field: VisitEditType;
+  oldValue: string;
+  newValue: string;
+  editedBy: string;
+  editedAt: string;
+  reason: string;
+}
+
+// MOD-010: Odometer correction history entry
+export interface OdometerCorrectionEntry {
+  id: string;
+  readingId: string;
+  version: number;
+  type: OdometerCorrectionType;
+  oldValue: number | null;
+  newValue: number | null;
+  reason: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  createdBy: string;
+  createdAt: string;
+  linkedClaimId: string | null;
+  dateKey?: string | null;
+  status?: "PENDING_MANAGER_REOPEN" | "REOPENED" | "APPLIED" | "REJECTED";
+}
+
+// MOD-013: Agent daily travel summary (computed, not stored)
+export interface OdometerDaySummary {
+  date: string;
+  agentId: string;
+  agentName: string;
+  startReading: number | null;
+  endReading: number | null;
+  totalKm: number | null;
+  siteVisits: number;
+  dayStatus: OdometerDayStatus;
+  continuityStatus: OdometerContinuityStatus;
+  missingProofs: string[];
+  corrections: number;
+  claimStatus: string | null;
+  hasLateUpload: boolean;
+}
+
+// MOD-023: Stakeholder master profile — one person across multiple sites
+export interface StakeholderMaster {
+  id: string;
+  name: string;
+  phone: string;
+  role: StakeholderRole;
+  phoneVerificationStatus: PhoneVerificationStatus;
+  phoneVerifiedAt: string | null;
+  lastCallVerificationAt?: string | null;
+  lastWhatsappVerificationAt?: string | null;
+  lastVerificationError?: string | null;
+  linkedSiteIds: string[];
+  linkedLeadIds: string[];
+  billingResponsibility: "CONTRACTOR" | "BUILDER" | "OWNER" | "NOT_SET";
+  materialScope: string;
+  gstin: string | null;
+  pan: string | null;
+  billingAddress: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// MOD-025: Quotation revision record
+export interface QuotationRevision {
+  id: string;
+  quotationId: string;
+  revisionNumber: number;
+  correctionStatus: QuotationCorrectionStatus;
+  correctionReason: string | null;
+  correctionRequestedBy: string | null;
+  correctionRequestedAt: string | null;
+  previousRevisionId: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+// MOD-026: Final approval record
+export interface FinalApprovalRecord {
+  id: string;
+  quotationId: string;
+  quotationRevisionId: string | null;
+  siteId: string;
+  leadId: string;
+  status: FinalApprovalStatus;
+  creditApprovalStatus: "PENDING" | "APPROVED" | "REJECTED" | "NOT_REQUIRED";
+  variationNotes: string | null;
+  distanceKm: number;
+  routeFeasibilityStatus: "FEASIBLE" | "MARGINAL" | "NOT_FEASIBLE" | "NOT_CHECKED";
+  materialScope: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectedBy: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+  lockedAt: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface SiteMapMarker {
+  siteId: string;
+  leadId: string;
+  plantId: string;
+  siteName: string;
+  siteAddress: string;
+  siteStatus: SiteStatus;
+  leadStage: LeadStage;
+  pinColor: MapPinColor;
+  latLng: LatLng | null;
+  stakeholderMasterId: string | null;
+  stakeholderName: string | null;
+  stakeholderPhone: string | null;
+  phoneVerificationStatus: PhoneVerificationStatus | null;
+  grade: string;
+  quantityCum: number;
+  lastVisitedAt: string;
+  missingLocation: boolean;
+}
+
 export interface Database {
   users: User[];
   authSessions: AuthSession[];
@@ -766,11 +1181,18 @@ export interface Database {
   documentTemplates: DocumentTemplate[];
   salesOrderRequests: SalesOrderRequest[];
   reimbursementClaims: ReimbursementClaim[];
+  reimbursementAdjustments: ReimbursementAdjustmentEntry[];
   // RMC Phase 1 additions
   mixDesigns: MixDesign[];
   dispatchRecords: DispatchRecord[];
   commissionVouchers: CommissionVoucher[];
   customerLedgerEntries: CustomerLedgerEntry[];
+  // MOD additions
+  contactVerificationEvents: ContactVerificationEvent[];
+  stakeholderMasters: StakeholderMaster[];
+  odometerCorrections: OdometerCorrectionEntry[];
+  quotationRevisions: QuotationRevision[];
+  finalApprovals: FinalApprovalRecord[];
 }
 
 export interface ReimbursementSummary {
@@ -805,9 +1227,11 @@ export interface AgentDashboardData {
   informalQuotationRequests: InformalQuotationRequest[];
   salesOrderRequests: SalesOrderRequest[];
   reimbursementClaims: ReimbursementClaim[];
+  reimbursementAdjustments: ReimbursementAdjustmentEntry[];
   targets: Target[];
   helpRequests: HelpRequest[];
   reimbursementSummaries: ReimbursementSummary[];
+  siteMapMarkers: SiteMapMarker[];
   pipelineQuantity: number;
   approvedQuantity: number;
 }
@@ -818,12 +1242,15 @@ export interface ManagerDashboardData {
   odometerReadings: OdometerReading[];
   verificationQueue: OdometerReading[];
   siteVisits: SiteVisit[];
+  leadSites: LeadSite[];
+  siteMapMarkers: SiteMapMarker[];
   workdaySessions: WorkdaySession[];
   leads: Lead[];
   approvals: ApprovalRequest[];
   informalQuotationRequests: InformalQuotationRequest[];
   salesOrderRequests: SalesOrderRequest[];
   reimbursementClaims: ReimbursementClaim[];
+  reimbursementAdjustments: ReimbursementAdjustmentEntry[];
   helpRequests: HelpRequest[];
   tasks: Task[];
   targets: Target[];
@@ -842,6 +1269,7 @@ export interface AccountingDashboardData {
   plants: Plant[];
   reimbursements: ReimbursementSummary[];
   reimbursementClaims: ReimbursementClaim[];
+  reimbursementAdjustments: ReimbursementAdjustmentEntry[];
   tasks: Task[];
   approvals: ApprovalRequest[];
   salesOrderRequests: SalesOrderRequest[];

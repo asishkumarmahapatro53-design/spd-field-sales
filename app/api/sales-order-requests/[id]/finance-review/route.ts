@@ -17,6 +17,7 @@ async function readFinanceReviewBody(request: Request) {
       creditLimitAmount?: number | null;
       creditPeriodDays?: number | null;
       creditRiskCategory?: "LOW" | "MEDIUM" | "HIGH" | "BLOCKED";
+      financeRejectionReason?: "PO_MISSING" | "GST_INVALID" | "CREDIT_EXCEEDED" | "PAYMENT_NOT_RECEIVED" | "DUPLICATE_REQUEST" | "INCOMPLETE_DETAILS" | "OTHER";
     };
   }
 
@@ -58,6 +59,7 @@ async function readFinanceReviewBody(request: Request) {
     creditLimitAmount: Number(formData.get("creditLimitAmount") || 0),
     creditPeriodDays: Number(formData.get("creditPeriodDays") || 0),
     creditRiskCategory: `${formData.get("creditRiskCategory") ?? "LOW"}` as "LOW" | "MEDIUM" | "HIGH" | "BLOCKED",
+    financeRejectionReason: `${formData.get("financeRejectionReason") ?? "OTHER"}` as "OTHER",
   };
 }
 
@@ -80,6 +82,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         creditLimitAmount: body.creditLimitAmount,
         creditPeriodDays: body.creditPeriodDays,
         creditRiskCategory: body.creditRiskCategory,
+        financeRejectionReason: body.financeRejectionReason,
       },
     );
     return jsonOk({ orderRequest });

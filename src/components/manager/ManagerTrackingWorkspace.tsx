@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { MetricCard } from "@/components/MetricCard";
 import { Panel } from "@/components/Panel";
+import { AgentSiteMap } from "@/components/agent/AgentSiteMap";
 import { compareIsoAsc, toDateKey, toIndiaTimeLabel } from "@/lib/date";
 import type { LatLng, ManagerDashboardData, OdometerReading, SiteVisit, User, WorkdaySession } from "@/lib/types";
 
@@ -268,6 +269,7 @@ export function ManagerTrackingWorkspace({ data }: { data: ManagerDashboardData 
   const agentsOnDuty = trackingSummaries.filter((entry) => entry.status === "ON_DUTY").length;
   const activeToday = trackingSummaries.filter((entry) => entry.latestEventAt).length;
   const totalVisits = trackingSummaries.reduce((sum, entry) => sum + entry.siteCount, 0);
+  const selectedPlantMarkers = data.siteMapMarkers.filter((marker) => marker.plantId === selectedPlant.id);
 
   if (!selectedPlant) {
     return <div className="note-box mt-24">No plants are configured yet for tracking.</div>;
@@ -313,6 +315,15 @@ export function ManagerTrackingWorkspace({ data }: { data: ManagerDashboardData 
         <MetricCard label="Working now" value={agentsOnDuty} note="Open workday sessions on selected date" />
         <MetricCard label="Active today" value={activeToday} note="Agents with at least one captured event" />
         <MetricCard label="Site visits" value={totalVisits} note="Total visits logged on selected date" />
+      </section>
+
+      <section className="mt-24">
+        <Panel
+          title="Site Map"
+          description="Manager view of authorized plant sites, missing locations, closed-site opt-in, and direction audit actions."
+        >
+          <AgentSiteMap markers={selectedPlantMarkers} />
+        </Panel>
       </section>
 
       <section className="manager-tracking-shell mt-24">

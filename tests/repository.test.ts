@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeReimbursementSummaries } from "@/lib/repository";
+import { groupAgentReadings } from "@/lib/agent-dashboard";
 import { getOcrPromptText, normalizeGeminiReadingValue, OcrService } from "@/lib/ocr";
 import type { Database } from "@/lib/types";
 
@@ -103,6 +104,7 @@ const baseDatabase: Database = {
   informalQuotationRequests: [],
   salesOrderRequests: [],
   reimbursementClaims: [],
+  reimbursementAdjustments: [],
   tasks: [],
   helpRequests: [],
   targets: [],
@@ -117,6 +119,12 @@ const baseDatabase: Database = {
   dispatchRecords: [],
   commissionVouchers: [],
   customerLedgerEntries: [],
+  // MOD additions
+  contactVerificationEvents: [],
+  stakeholderMasters: [],
+  odometerCorrections: [],
+  quotationRevisions: [],
+  finalApprovals: [],
 };
 
 describe("computeReimbursementSummaries", () => {
@@ -143,6 +151,42 @@ describe("computeReimbursementSummaries", () => {
 
     const summaries = computeReimbursementSummaries(database, "agent-1");
     expect(summaries[0]?.status).toBe("MANUAL_VERIFIED");
+  });
+
+  it("excludes discarded odometer proofs from reimbursement totals", () => {
+    const database: Database = {
+      ...baseDatabase,
+      odometerReadings: [
+        ...baseDatabase.odometerReadings,
+        {
+          ...baseDatabase.odometerReadings[1]!,
+          id: "discarded-end",
+          finalValue: 12500,
+          ocrValue: 12500,
+          status: "DISCARDED",
+          isActiveReading: false,
+          discardedAt: "2026-04-20T13:10:00.000Z",
+          discardedBy: "agent-1",
+        },
+      ],
+    };
+
+    const summaries = computeReimbursementSummaries(database, "agent-1");
+    expect(summaries[0]?.endReading).toBe(12048);
+    expect(summaries[0]?.totalDistance).toBe(48);
+  });
+});
+
+describe("groupAgentReadings", () => {
+  it("keeps discarded proofs in history instead of the action queue", () => {
+    const readings = [
+      { ...baseDatabase.odometerReadings[0]!, status: "AWAITING_CONFIRMATION" as const },
+      { ...baseDatabase.odometerReadings[1]!, status: "DISCARDED" as const, isActiveReading: false },
+    ];
+
+    const grouped = groupAgentReadings(readings);
+    expect(grouped.needsAction.map((entry) => entry.status)).toEqual(["AWAITING_CONFIRMATION"]);
+    expect(grouped.history.map((entry) => entry.status)).toEqual(["DISCARDED"]);
   });
 });
 

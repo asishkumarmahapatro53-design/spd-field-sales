@@ -397,6 +397,7 @@ function createSeedDatabase(): Database {
     informalQuotationRequests: [],
     salesOrderRequests: [],
     reimbursementClaims: [],
+    reimbursementAdjustments: [],
     tasks: [
       {
         id: randomUUID(),
@@ -429,6 +430,12 @@ function createSeedDatabase(): Database {
     dispatchRecords: [],
     commissionVouchers: [],
     customerLedgerEntries: [],
+    // MOD additions
+    contactVerificationEvents: [],
+    stakeholderMasters: [],
+    odometerCorrections: [],
+    quotationRevisions: [],
+    finalApprovals: [],
   };
 }
 
@@ -553,6 +560,7 @@ function normalizeDatabase(rawDatabase: Database) {
 
   (database.users ?? []).forEach((user) => {
     user.email ??= null;
+    user.lastReimbursementClosedDate ??= null;
     if (user.role === "MIX_DESIGN" && !user.homePlantId) {
       user.homePlantId = fallbackPlantId;
     }
@@ -573,6 +581,58 @@ function normalizeDatabase(rawDatabase: Database) {
 
   (database.workdaySessions ?? []).forEach((session) => {
     session.plantId ??= database.users.find((entry) => entry.id === session.userId)?.homePlantId ?? fallbackPlantId;
+  });
+
+  // MOD-001 through MOD-014: Normalize odometer reading fields
+  (database.odometerReadings ?? []).forEach((reading) => {
+    // MOD-001: Manual reading / OCR comparison / discard flow
+    reading.agentEnteredReading ??= null;
+    reading.readingDifference ??= null;
+    reading.managerFinalReading ??= reading.verifiedBy ? reading.finalValue : null;
+    reading.discardedAt ??= null;
+    reading.discardedBy ??= null;
+    reading.discardReason ??= null;
+    reading.discardNote ??= null;
+    reading.replacedByReadingId ??= null;
+    reading.replacesReadingId ??= null;
+    // MOD-002: GPS watermark metadata
+    reading.gpsWatermarkText ??= null;
+    reading.gpsCapturedDate ??= null;
+    reading.gpsCapturedLocation ??= null;
+    reading.gpsAccuracy ??= null;
+    // MOD-003: Upload metadata
+    reading.uploadedBy ??= null;
+    reading.uploadDateTime ??= reading.capturedAt;
+    reading.uploadSource ??= "LIVE";
+    reading.fileSizeBytes ??= null;
+    // MOD-004: Duplicate image detection
+    reading.imageHash ??= null;
+    reading.duplicateOfReadingId ??= null;
+    reading.duplicateWarningAcknowledgedBy ??= null;
+    reading.duplicateWarningAcknowledgedAt ??= null;
+    // MOD-005: Active reading flag
+    reading.isActiveReading ??= reading.status !== "DISCARDED";
+    // MOD-010: Correction versioning
+    reading.correctionVersion ??= 1;
+    reading.previousReadingValue ??= null;
+    reading.correctionReason ??= null;
+    reading.correctionApprovedBy ??= null;
+    reading.correctionApprovedAt ??= null;
+    // MOD-011: Watermark status
+    reading.hasGpsWatermark ??= Boolean(reading.gpsWatermarkText || reading.gpsCapturedDate);
+    reading.watermarkStatus ??= reading.hasGpsWatermark ? "PRESENT" : "MISSING";
+    // MOD-012: Continuity check
+    reading.continuityStatus ??= "OK";
+    reading.continuityNote ??= null;
+    // MOD-013: Manager review
+    reading.reviewReason ??= null;
+    reading.managerReviewRequiredAt ??= reading.status === "MANUAL_REVIEW_REQUIRED" ? reading.capturedAt : null;
+    reading.managerReviewedAt ??= reading.status === "MANUAL_VERIFIED" && reading.verifiedBy ? reading.capturedAt : null;
+    reading.managerRemark ??= reading.verificationNote;
+    reading.lockStatus ??= "OPEN";
+    reading.reopenedForCorrectionBy ??= null;
+    reading.reopenedForCorrectionAt ??= null;
+    reading.reopenedForCorrectionReason ??= null;
   });
 
   (database.leads ?? []).forEach((lead) => {
@@ -613,6 +673,37 @@ function normalizeDatabase(rawDatabase: Database) {
     visit.photoWatermarkAddress ??= visit.siteAddress;
     visit.locationVerificationStatus ??= "NOT_APPLICABLE";
     visit.locationVerificationDistanceMeters ??= null;
+    // MOD-015: Captured date mapping
+    visit.capturedDate ??= visit.visitedAt ? toDateKey(visit.visitedAt) : null;
+    visit.uploadDate ??= null;
+    visit.isLateSync ??= false;
+    // MOD-016: GPS review status
+    visit.gpsReviewStatus ??= visit.latLng || visit.detectedLatLng ? "AUTO_APPROVED" : "PENDING_REVIEW";
+    visit.gpsReviewNote ??= null;
+    visit.gpsReviewedBy ??= null;
+    visit.gpsReviewedAt ??= null;
+    // MOD-017: Active visit tracking
+    visit.activeVisitStatus ??= "COMPLETED";
+    visit.visitStartedAt ??= visit.visitedAt;
+    visit.visitCompletedAt ??= visit.visitedAt;
+    visit.cancelledAt ??= null;
+    visit.cancelReason ??= null;
+    // MOD-018: Duplicate detection
+    visit.duplicateMatchStrength ??= "NONE";
+    visit.duplicateMatchedSiteId ??= null;
+    visit.duplicateOverrideReason ??= null;
+    // MOD-018: Productivity tag
+    visit.productivityTag ??= "PRODUCTIVE";
+    visit.arrivalPhotoHash ??= null;
+    visit.isPhotoReused ??= false;
+    // MOD-019: Edit history
+    visit.editHistory ??= [];
+    // MOD-021: Contact presence
+    visit.contactPresenceStatus ??= visit.stakeholders.some(s => s.role === "FOUND_NO_ONE") ? "FOUND_NO_ONE" : "PRESENT";
+    // MOD-018: Follow-up task
+    visit.followUpTaskId ??= null;
+    visit.managerReviewRequired ??= visit.gpsReviewStatus === "PENDING_REVIEW" || visit.duplicateMatchStrength === "STRONG";
+    visit.managerReviewReason ??= null;
   });
 
   (database.leadSites ?? []).forEach((site) => {
@@ -630,6 +721,22 @@ function normalizeDatabase(rawDatabase: Database) {
     site.updatedAt ??= site.createdAt;
     site.lastVisitedAt ??= site.updatedAt;
     site.latLng ??= null;
+    // MOD-022: Site-level status
+    site.siteStatus ??= "ACTIVE";
+    site.closureReason ??= null;
+    site.closureRemarks ??= null;
+    site.closedBy ??= null;
+    site.closedAt ??= null;
+    site.closureApprovedBy ??= null;
+    site.closureApprovedAt ??= null;
+    site.reopenedBy ??= null;
+    site.reopenedAt ??= null;
+    site.reopenReason ??= null;
+    site.mergedIntoSiteId ??= null;
+    // MOD-020: Directions
+    site.directionsLastUsedAt ??= null;
+    site.directionsUsageCount ??= 0;
+    site.lastDirectionsUsedBy ??= null;
   });
 
   (database.leads ?? []).forEach((lead) => {
@@ -641,6 +748,19 @@ function normalizeDatabase(rawDatabase: Database) {
     lead.primarySiteId = primarySite?.id ?? null;
     lead.primarySiteLatLng = primarySite?.latLng ?? null;
     lead.siteCount = sites.length;
+    // MOD-019/022: Lead closure
+    lead.closureReason ??= null;
+    lead.closureRemarks ??= null;
+    lead.closedBy ??= null;
+    lead.closedAt ??= null;
+    lead.closureApprovedBy ??= null;
+    lead.closureApprovedAt ??= null;
+    lead.reopenedBy ??= null;
+    lead.reopenedAt ??= null;
+    lead.reopenReason ??= null;
+    lead.closureStatus ??= lead.stage === "DEAD" || lead.stage === "LOST" ? "APPROVED_CLOSED" : "OPEN";
+    lead.closureRequestedBy ??= null;
+    lead.closureRequestedAt ??= null;
   });
 
   (database.approvalRequests ?? []).forEach((approval) => {
@@ -669,6 +789,15 @@ function normalizeDatabase(rawDatabase: Database) {
     approval.paymentTerms = normalizePaymentTerms(approval.paymentType, approval.paymentTerms ?? "ADVANCE");
     approval.grade ??= approval.items[0]?.grade ?? "";
     approval.quotedPrice ??= approval.items[0]?.quotedPrice ?? 0;
+    approval.linkedQuotationId ??= null;
+    approval.linkedQuotationRevisionId ??= null;
+    approval.quotationValidityStatus ??= "NOT_LINKED";
+    approval.directFinalApprovalReason ??= null;
+    approval.routeFeasibilityStatus ??= "NOT_CHECKED";
+    approval.variationNotes ??= null;
+    approval.minimumRatePerCum ??= null;
+    approval.rateValidationStatus ??= "NOT_CHECKED";
+    approval.finalApprovalRecordId ??= null;
   });
 
   database.informalQuotationRequests ??= [];
@@ -712,6 +841,26 @@ function normalizeDatabase(rawDatabase: Database) {
     request.whatsappStatus ??= "NOT_SENT";
     request.whatsappSentAt ??= null;
     request.whatsappError ??= null;
+    // MOD-024: Pre-eligibility & validation
+    request.eligibilityChecked ??= false;
+    request.rateValidationStatus ??= "NOT_CHECKED";
+    request.rateValidationNote ??= null;
+    request.minimumRatePerCum ??= null;
+    request.duplicateOfQuotationId ??= null;
+    // MOD-025: Versioning & correction
+    request.revisionNumber ??= 1;
+    request.previousRevisionId ??= null;
+    request.latestRevisionId ??= null;
+    request.validityDate ??= null;
+    request.isExpired ??= false;
+    request.correctionStatus ??= "NONE";
+    request.correctionReason ??= null;
+    request.correctionRequestedBy ??= null;
+    request.correctionRequestedAt ??= null;
+    request.creditApprovalRequired ??= request.paymentType === "CREDIT";
+    request.creditApprovedBy ??= null;
+    request.creditApprovedAt ??= null;
+    request.deliveryChannels ??= [];
   });
 
   database.salesOrderRequests ??= [];
@@ -825,6 +974,40 @@ function normalizeDatabase(rawDatabase: Database) {
           : legacyStatus === "REJECTED"
             ? "FINANCE_REJECTED"
             : "PENDING_FINANCE";
+    // MOD-027: Sales Order Request improvements
+    request.sorNumber ??= null;
+    request.isDuplicateRequest ??= false;
+    request.duplicateOfOrderId ??= null;
+    request.financeRejectionReason ??= null;
+    request.financeRejectionHistory ??= [];
+    request.correctionResubmittedAt ??= null;
+    request.correctionResubmittedBy ??= null;
+    request.odooPreflight ??= "PENDING";
+    request.odooPreflightError ??= null;
+    request.preliminaryMixDesignStatus ??= "NOT_REQUIRED";
+    request.postFinanceLocked ??= request.status === "FINANCE_VERIFIED" || request.status === "SCHEDULE_APPROVED";
+    request.postFinanceLockedAt ??= request.postFinanceLocked && request.financeReviewedAt ? request.financeReviewedAt : null;
+    // MOD-028: Sales Order Management
+    request.internalReference ??= null;
+    request.revisionType ??= "NEW";
+    request.deliveryDateValidated ??= false;
+    request.isUrgent ??= request.priority === "URGENT";
+    request.urgentReason ??= null;
+    request.receiverPhoneValidated ??= false;
+    request.plantLockedAt ??= null;
+    request.plantChangeApprovedBy ??= null;
+    request.plantChangeReason ??= null;
+    request.orderQuantity ??= request.quantity;
+    request.attachmentVersions ??= [];
+    // MOD-029: Order continuity & fulfillment
+    request.fulfillmentStatus ??= request.remainingQuantity <= 0 ? "FULLY_FULFILLED" : request.remainingQuantity < request.quantity ? "PARTIALLY_FULFILLED" : "OPEN";
+    request.isOpenVolume ??= false;
+    request.parentOrderId ??= null;
+    request.childOrderIds ??= [];
+    request.cancelledAt ??= null;
+    request.cancelledBy ??= null;
+    request.cancellationReason ??= null;
+    request.editHistory ??= [];
   });
 
   // Normalize new RMC collections (ensure they exist)
@@ -845,6 +1028,18 @@ function normalizeDatabase(rawDatabase: Database) {
   database.commissionVouchers ??= [];
   database.customerLedgerEntries ??= [];
   database.documentTemplates ??= [];
+
+  // MOD additions — normalize new collections
+  database.contactVerificationEvents ??= [];
+  database.stakeholderMasters ??= [];
+  database.stakeholderMasters.forEach((stakeholder) => {
+    stakeholder.lastCallVerificationAt ??= null;
+    stakeholder.lastWhatsappVerificationAt ??= null;
+    stakeholder.lastVerificationError ??= null;
+  });
+  database.odometerCorrections ??= [];
+  database.quotationRevisions ??= [];
+  database.finalApprovals ??= [];
 
   database.reimbursementClaims ??= [];
   (database.reimbursementClaims ?? []).forEach((claim) => {
@@ -939,6 +1134,7 @@ const COLLECTION_NAMES = [
   "informalQuotationRequests",
   "salesOrderRequests",
   "reimbursementClaims",
+  "reimbursementAdjustments",
   "tasks",
   "helpRequests",
   "targets",
@@ -954,6 +1150,12 @@ const COLLECTION_NAMES = [
   "dispatchRecords",
   "commissionVouchers",
   "customerLedgerEntries",
+  // MOD additions
+  "contactVerificationEvents",
+  "stakeholderMasters",
+  "odometerCorrections",
+  "quotationRevisions",
+  "finalApprovals",
 ] as const;
 
 // Compile-time safety: if a new Database collection is added but not listed above,

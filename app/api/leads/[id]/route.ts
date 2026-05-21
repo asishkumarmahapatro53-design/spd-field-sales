@@ -1,12 +1,31 @@
 import type { LeadStage } from "@/lib/types";
 import { ApiError, jsonError, jsonOk, requireApiUser } from "@/lib/api";
-import { updateLead } from "@/lib/repository";
+import { closeLead, rejectLeadClosure, reopenLead, updateLead } from "@/lib/repository";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const user = await requireApiUser(["SALES_AGENT", "MANAGER"]);
     const body = (await request.json()) as Record<string, string | number>;
     const { id } = await context.params;
+    const action = `${body.action ?? ""}`.trim();
+
+    if (action === "close") {
+      const lead = await closeLead(user, id, {
+        reason: `${body.reason ?? ""}`.trim(),
+        remarks: `${body.remarks ?? ""}`.trim(),
+      });
+      return jsonOk({ lead });
+    }
+
+    if (action === "reopen") {
+      const lead = await reopenLead(user, id, `${body.reason ?? ""}`);
+      return jsonOk({ lead });
+    }
+
+    if (action === "rejectClosure") {
+      const lead = await rejectLeadClosure(user, id, `${body.reason ?? ""}`);
+      return jsonOk({ lead });
+    }
 
     let nextFollowUpAt: string | undefined;
     if (body.nextFollowUpAt) {
