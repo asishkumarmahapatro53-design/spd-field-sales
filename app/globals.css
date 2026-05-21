@@ -3618,6 +3618,7 @@ th {
 
 .site-map-canvas {
   position: relative;
+  height: 450px;
   min-height: 360px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -3636,6 +3637,19 @@ th {
 .site-map-sdk-canvas {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.site-map-sdk-canvas > div,
+.site-map-sdk-canvas canvas,
+.site-map-sdk-canvas img {
+  max-width: none;
+}
+
+.site-map-sdk-canvas > div {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .site-map-status {

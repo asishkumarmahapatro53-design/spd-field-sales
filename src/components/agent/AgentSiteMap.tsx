@@ -36,6 +36,8 @@ const PIN_COLOR_HEX: Record<SiteMapMarker["pinColor"], string> = {
 
 type MapplsMap = {
   addListener?: (eventName: string, handler: () => void) => void;
+  invalidateSize?: () => void;
+  resize?: () => void;
   setCenter?: (center: { lat: number; lng: number }) => void;
   setZoom?: (zoom: number) => void;
   remove?: () => void;
@@ -119,6 +121,12 @@ function normalizePosition(value: number, min: number, max: number) {
   }
 
   return Math.max(8, Math.min(92, ((value - min) / (max - min)) * 84 + 8));
+}
+
+function refreshMapSize(map: MapplsMap | null) {
+  map?.resize?.();
+  map?.invalidateSize?.();
+  window.dispatchEvent(new Event("resize"));
 }
 
 export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
@@ -244,7 +252,10 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
           mapRef.current.setZoom?.(locatedMarkers.length > 1 ? 11 : 15);
         }
 
+        refreshMapSize(mapRef.current);
         window.setTimeout(renderMarkers, 250);
+        window.setTimeout(() => refreshMapSize(mapRef.current), 300);
+        window.setTimeout(() => refreshMapSize(mapRef.current), 900);
         setMapStatus("ready");
       })
       .catch(() => {
