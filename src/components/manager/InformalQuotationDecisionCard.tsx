@@ -147,13 +147,14 @@ export function InformalQuotationDecisionCard({
 
   async function uploadQuotationTemplate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     setTemplateBusy(true);
     setTemplateMessage("");
     setTemplateError("");
 
     try {
-      await uploadDocumentTemplate({ form: event.currentTarget, type: "QUOTATION" });
-      event.currentTarget.reset();
+      await uploadDocumentTemplate({ form, type: "QUOTATION" });
+      form.reset();
       setTemplateMessage("Quotation template uploaded and activated.");
       startTransition(() => router.refresh());
     } catch (error) {

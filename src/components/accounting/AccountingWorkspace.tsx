@@ -599,13 +599,14 @@ function DocumentTemplatePanel({ templates }: { templates: DocumentTemplate[] })
 
   async function uploadTemplate(event: React.FormEvent<HTMLFormElement>, type: DocumentTemplateType) {
     event.preventDefault();
+    const form = event.currentTarget;
     setMessage("");
     setError("");
     setBusyType(type);
 
     try {
-      await uploadDocumentTemplate({ form: event.currentTarget, type });
-      event.currentTarget.reset();
+      await uploadDocumentTemplate({ form, type });
+      form.reset();
       setMessage(`${type.toLowerCase().replaceAll("_", " ")} template uploaded and activated.`);
       startTransition(() => router.refresh());
     } catch (error) {
