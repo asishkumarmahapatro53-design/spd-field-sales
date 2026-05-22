@@ -134,6 +134,9 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
   const mapRef = useRef<MapplsMap | null>(null);
   const markerRefs = useRef<MapplsMarker[]>([]);
   const [showClosed, setShowClosed] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"ALL" | SiteMapMarker["siteStatus"]>("ALL");
+  const [locationFilter, setLocationFilter] = useState<"ALL" | "WITH_LOCATION" | "MISSING_LOCATION">("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState(markers[0]?.siteId ?? "");
   const [mapStatus, setMapStatus] = useState<"missing-key" | "loading" | "ready" | "error">(
     MAPPLS_MAP_KEY ? "loading" : "missing-key",
@@ -141,10 +144,48 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
   const [busyVerification, setBusyVerification] = useState<"CALL" | "WHATSAPP" | null>(null);
   const [verificationNote, setVerificationNote] = useState("");
   const [verificationError, setVerificationError] = useState("");
-  const visibleMarkers = useMemo(
-    () => (showClosed ? markers : markers.filter((marker) => marker.siteStatus !== "DEAD" && marker.siteStatus !== "LOST")),
-    [markers, showClosed],
-  );
+  const visibleMarkers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return markers.filter((marker) => {
+      if (!showClosed && (marker.siteStatus === "DEAD" || marker.siteStatus === "LOST")) {
+        return false;
+      }
+
+      if (statusFilter !== "ALL" && marker.siteStatus !== statusFilter) {
+        return false;
+      }
+
+      if (locationFilter === "WITH_LOCATION" && marker.missingLocation) {
+        return false;
+      }
+
+      if (locationFilter === "MISSING_LOCATION" && !marker.missingLocation) {
+        return false;
+      }
+
+      if (query) {
+        const searchable = [
+          marker.siteName,
+          marker.siteAddress,
+          marker.stakeholderName,
+          marker.stakeholderPhone,
+          marker.grade,
+          marker.siteStatus,
+          marker.leadStage,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        if (!searchable.includes(query)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [locationFilter, markers, searchQuery, showClosed, statusFilter]);
   const selectedMarker = visibleMarkers.find((marker) => marker.siteId === selectedId) ?? visibleMarkers[0] ?? null;
   const locatedMarkers = useMemo(() => visibleMarkers.filter((marker) => marker.latLng), [visibleMarkers]);
   const fallbackBounds = useMemo(() => {
@@ -280,7 +321,25 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
   }, []);
 
   async function openDirections(marker: SiteMapMarker) {
-    await fetch(`/api/sites/${marker.siteId}/directions`, { method: "POST" }).catch(() => undefined);
+    const response = await fetch(`/api/sites/${marker.siteId}/directions`, { method: "POST" }).catch(() => null);
+
+    if (response) {
+      const payload = (await response.json().catch(() => ({}))) as {
+        locationCorrectionRequired?: boolean;
+        locationCorrectionReason?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok || payload.error) {
+        setVerificationError(payload.error ?? "Could not record direction usage.");
+        return;
+      }
+
+      if (payload.locationCorrectionRequired) {
+        setVerificationNote(payload.locationCorrectionReason ?? "Site location correction required.");
+      }
+    }
+
     window.open(getGoogleDirectionsUrl(marker), "_blank", "noopener,noreferrer");
   }
 
@@ -340,6 +399,45 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
           <input type="checkbox" checked={showClosed} onChange={(event) => setShowClosed(event.target.checked)} />
           Show dead/lost
         </label>
+
+        <div className="field compact-field">
+          <label htmlFor="siteMapSearch">Search</label>
+          <input
+            id="siteMapSearch"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Site, area, phone, grade"
+          />
+        </div>
+
+        <div className="field compact-field">
+          <label htmlFor="siteMapStatusFilter">Status</label>
+          <select
+            id="siteMapStatusFilter"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as "ALL" | SiteMapMarker["siteStatus"])}
+          >
+            <option value="ALL">All statuses</option>
+            <option value="ACTIVE">Active</option>
+            <option value="CONVERTED">Converted</option>
+            <option value="DEAD">Dead</option>
+            <option value="LOST">Lost</option>
+            <option value="MERGED">Merged</option>
+          </select>
+        </div>
+
+        <div className="field compact-field">
+          <label htmlFor="siteMapLocationFilter">Location</label>
+          <select
+            id="siteMapLocationFilter"
+            value={locationFilter}
+            onChange={(event) => setLocationFilter(event.target.value as "ALL" | "WITH_LOCATION" | "MISSING_LOCATION")}
+          >
+            <option value="ALL">All locations</option>
+            <option value="WITH_LOCATION">With coordinates</option>
+            <option value="MISSING_LOCATION">Missing coordinates</option>
+          </select>
+        </div>
       </div>
 
       <div className="site-map-canvas is-sdk-map" aria-label="Site map view">
@@ -394,10 +492,35 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
               <p className="hint">Contact status: {selectedMarker.phoneVerificationStatus.toLowerCase().replaceAll("_", " ")}</p>
             ) : null}
             <p className="hint">Last visit {toIndiaTimeLabel(selectedMarker.lastVisitedAt)}</p>
+            {selectedMarker.locationCorrectionRequired ? (
+              <div className="warning-box mt-12">
+                <strong>Location correction required</strong>
+                <p>{selectedMarker.locationCorrectionReason ?? "Site coordinates are missing or incomplete."}</p>
+              </div>
+            ) : null}
+
+            {selectedMarker.directionsUsageCount ? (
+              <p className="hint">
+                Directions opened {selectedMarker.directionsUsageCount} time(s)
+                {selectedMarker.directionsLastUsedAt ? `, last used ${toIndiaTimeLabel(selectedMarker.directionsLastUsedAt)}` : ""}
+              </p>
+            ) : null}
             <div className="button-row">
               <button className="button" type="button" onClick={() => void openDirections(selectedMarker)}>
                 Get direction
               </button>
+              <a className="button-ghost" href={`/agent/site-visit?leadId=${selectedMarker.leadId}&siteId=${selectedMarker.siteId}`}>
+                Add site visit
+              </a>
+              <a className="button-ghost" href={`/agent/leads?leadId=${selectedMarker.leadId}&siteId=${selectedMarker.siteId}`}>
+                View timeline
+              </a>
+              <a
+                className="button-ghost"
+                href={`/agent/informal-quotation?leadId=${selectedMarker.leadId}&siteId=${selectedMarker.siteId}`}
+              >
+                Request informal quotation
+              </a>
               {selectedMarker.stakeholderPhone ? (
                 <a className="button-ghost" href={`tel:${selectedMarker.stakeholderPhone}`}>
                   Call stakeholder
@@ -429,6 +552,32 @@ export function AgentSiteMap({ markers }: { markers: SiteMapMarker[] }) {
           </>
         ) : null}
       </aside>
+
+      {visibleMarkers.some((marker) => marker.missingLocation) ? (
+        <div className="warning-box" style={{ margin: "1rem" }}>
+          <strong>Sites missing coordinates</strong>
+          <p className="hint">
+            These sites may not appear correctly on the Mappls map. Correct site location for reliable verification.
+          </p>
+
+          <div className="site-map-list">
+            {visibleMarkers
+              .filter((marker) => marker.missingLocation)
+              .map((marker) => (
+                <button
+                  key={`missing-${marker.siteId}`}
+                  className={marker.siteId === selectedMarker?.siteId ? "site-map-list-item is-active" : "site-map-list-item"}
+                  type="button"
+                  onClick={() => setSelectedId(marker.siteId)}
+                >
+                  <span className={`site-map-dot ${PIN_CLASS[marker.pinColor]}`} />
+                  <span>{marker.siteName}</span>
+                  <small>{marker.siteAddress || "Address missing"}</small>
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="site-map-list">
         {visibleMarkers.map((marker) => (

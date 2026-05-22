@@ -87,7 +87,7 @@ export function buildVerificationMessage(channel: ContactVerificationChannel, na
   return [
     greeting,
     `SPD Concrete is verifying your WhatsApp contact${site}.`,
-    "Reply YES to confirm this number belongs to the site stakeholder.",
+    "This message confirms WhatsApp reachability for SPD Concrete records.",
   ].join("\n");
 }
 

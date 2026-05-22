@@ -8,6 +8,48 @@ import { reverseGeocode } from "@/lib/image-utils";
 import { EXPECTED_SUPPLY_OPTIONS, getLocationVerification, getStakeholderLabel, STAKEHOLDER_OPTIONS, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
 import type { ExpectedSupplyWindow, Lead, LeadSite, LeadStage, SiteLocationVerificationStatus, StakeholderContact, StakeholderRole } from "@/lib/types";
 
+const CONCRETE_GRADE_OPTIONS = [
+  "M5",
+  "M7.5",
+  "M10",
+  "M15",
+  "M20",
+  "M25",
+  "M30",
+  "M35",
+  "M40",
+  "M45",
+  "M50",
+  "PCC",
+  "OTHER",
+];
+
+function sanitizePhoneInput(value: string) {
+  return value.replace(/\D/g, "").slice(0, 10);
+}
+
+function getPhoneInputHint(value: string) {
+  const phone = value.replace(/\D/g, "");
+
+  if (!phone) {
+    return "Enter 10-digit Indian mobile number.";
+  }
+
+  if (phone.length < 10) {
+    return `Phone number needs ${10 - phone.length} more digit(s).`;
+  }
+
+  if (!/^[6-9]/.test(phone)) {
+    return "Indian mobile number should start with 6, 7, 8, or 9.";
+  }
+
+  if (/^(\d)\1{9}$/.test(phone) || ["1234567890", "0123456789", "9876543210"].includes(phone)) {
+    return "This appears to be a dummy phone number and will require manager review.";
+  }
+
+  return "Phone format looks valid. WhatsApp/call verification will be handled separately.";
+}
+
 interface SiteVisitFlowCardProps {
   agentName: string;
   employeeId: string;
@@ -137,11 +179,12 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
   const [leadId, setLeadId] = useState(leads[0]?.id ?? "");
   const [siteMode, setSiteMode] = useState<"EXISTING_SITE" | "NEW_SITE">("EXISTING_SITE");
   const [siteId, setSiteId] = useState("");
+  const [siteSearchQuery, setSiteSearchQuery] = useState("");
   const [siteName, setSiteName] = useState("");
+  const [concreteGrade, setConcreteGrade] = useState("M25");
+  const [currentSupplier, setCurrentSupplier] = useState("");
   const [siteAddress, setSiteAddress] = useState("");
   const [siteAddressEdited, setSiteAddressEdited] = useState(false);
-  const [currentSupplierMode, setCurrentSupplierMode] = useState<"MANUAL_MIX" | "ADD_SUPPLIER">("MANUAL_MIX");
-  const [supplierInputs, setSupplierInputs] = useState([""]);
   const [expectedSupplyWindow, setExpectedSupplyWindow] = useState<ExpectedSupplyWindow>("WITHIN_15_DAYS");
   const [newStakeholders, setNewStakeholders] = useState<StakeholderDraft[]>([createStakeholderDraft()]);
   const [selectedKnownStakeholderKeys, setSelectedKnownStakeholderKeys] = useState<string[]>([]);
@@ -167,6 +210,27 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
 
   const selectedLead = useMemo(() => leads.find((entry) => entry.id === leadId) ?? null, [leadId, leads]);
   const sitesForLead = useMemo(() => leadSites.filter((entry) => entry.leadId === leadId), [leadId, leadSites]);
+  const filteredSitesForLead = useMemo(() => {
+    return sitesForLead.filter((site) => {
+      const query = siteSearchQuery.trim().toLowerCase();
+      if (!query) return true;
+
+      return [
+        site.siteName,
+        site.siteAddress,
+        site.currentSupplier,
+        site.currentConcreteGrade,
+        ...(site.stakeholders ?? []).flatMap((stakeholder) => [
+          stakeholder.name,
+          stakeholder.phone,
+          stakeholder.label,
+          stakeholder.role,
+        ]),
+      ]
+        .filter(Boolean)
+        .some((value) => `${value}`.toLowerCase().includes(query));
+    });
+  }, [sitesForLead, siteSearchQuery]);
   const selectedSite = useMemo(() => sitesForLead.find((entry) => entry.id === siteId) ?? null, [siteId, sitesForLead]);
   const selectableKnownStakeholders = useMemo(
     () => (selectedSite?.stakeholders ?? []).filter((entry) => !isFoundNoOneStakeholder(entry)),
@@ -208,14 +272,9 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       suggestLeadScore({
         expectedSupplyWindow,
         stakeholders: suggestedStakeholders,
-        currentSupplier:
-          usingExistingSite && selectedSite
-            ? selectedSite.currentSupplier
-            : currentSupplierMode === "MANUAL_MIX"
-              ? "Manual mix"
-              : supplierInputs.join(" | "),
+        currentSupplier: usingExistingSite && selectedSite ? selectedSite.currentSupplier : currentSupplier,
       }),
-    [currentSupplierMode, expectedSupplyWindow, selectedSite, suggestedStakeholders, supplierInputs, usingExistingSite],
+    [currentSupplier, expectedSupplyWindow, selectedSite, suggestedStakeholders, usingExistingSite],
   );
   const verification = useMemo(
     () =>
@@ -269,6 +328,9 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     setSiteAddressEdited(false);
     setSiteAddress(usingExistingSite ? selectedSite?.siteAddress ?? "" : "");
     setSiteName(usingExistingSite ? selectedSite?.siteName ?? "" : "");
+    setSiteSearchQuery("");
+    setConcreteGrade(usingExistingSite ? selectedSite?.currentConcreteGrade ?? "M25" : "M25");
+    setCurrentSupplier(usingExistingSite ? selectedSite?.currentSupplier ?? "" : "");
     setSelectedKnownStakeholderKeys([]);
     setStakeholderHint("");
     setFoundNoOne(false);
@@ -365,10 +427,6 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
     }
   }
 
-  function updateSupplierInput(index: number, value: string) {
-    setSupplierInputs((current) => current.map((entry, currentIndex) => (currentIndex === index ? value : entry)));
-  }
-
   function updateStakeholder(index: number, field: keyof StakeholderDraft, value: string) {
     setNewStakeholders((current) =>
       current.map((entry, currentIndex) =>
@@ -463,19 +521,6 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       return;
     }
 
-    const currentSupplier =
-      usingExistingSite && selectedSite
-        ? selectedSite.currentSupplier
-        : currentSupplierMode === "MANUAL_MIX"
-          ? "Manual mix"
-          : supplierInputs.map((entry) => entry.trim()).filter(Boolean).join("|");
-
-    if (!usingExistingSite && currentSupplierMode === "ADD_SUPPLIER" && !currentSupplier) {
-      setError("Add at least one current supplier or choose manual mix.");
-      setBusy(false);
-      return;
-    }
-
     try {
       const form = event.currentTarget;
       const formData = new FormData(form);
@@ -522,8 +567,8 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           siteName: usingExistingSite && selectedSite ? selectedSite.siteName : siteName.trim(),
           siteAddress: resolvedSiteAddress,
           stakeholders: JSON.stringify(encounteredStakeholders),
-          concreteGrade: formData.get("concreteGrade"),
-          quantityCum: formData.get("quantityCum"),
+          concreteGrade,
+          quantityCum: Number(formData.get("quantityCum")),
           stageOfWork: formData.get("stageOfWork"),
           futureScope: formData.get("futureScope"),
           remarksText,
@@ -560,6 +605,9 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
       setRemarksTranscriptText("");
       setSiteAddress("");
       setSiteName("");
+      setSiteSearchQuery("");
+      setConcreteGrade("M25");
+      setCurrentSupplier("");
       setSelectedKnownStakeholderKeys([]);
       setStakeholderHint("");
       setFoundNoOne(false);
@@ -648,9 +696,18 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
           </div>
           {sitesForLead.length > 1 ? (
             <div className="field">
-              <label htmlFor="siteId">Site</label>
+              <label htmlFor="siteSearchQuery">Search existing site</label>
+              <input
+                id="siteSearchQuery"
+                value={siteSearchQuery}
+                onChange={(event) => setSiteSearchQuery(event.target.value)}
+                placeholder="Search by site name, area, stakeholder, or phone"
+              />
+              <span className="hint">Search within the selected lead before creating a new site.</span>
+
+              <label htmlFor="siteId" style={{ marginTop: "16px" }}>Site</label>
               <select id="siteId" value={siteId} onChange={(event) => setSiteId(event.target.value)}>
-                {sitesForLead.map((site) => (
+                {filteredSitesForLead.map((site) => (
                   <option key={site.id} value={site.id}>
                     {site.siteName}
                   </option>
@@ -858,8 +915,12 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
                   <input
                     id={`stakeholder-phone-${stakeholder.id}`}
                     value={stakeholder.phone}
-                    onChange={(event) => updateStakeholder(index, "phone", event.target.value)}
+                    onChange={(event) => updateStakeholder(index, "phone", sanitizePhoneInput(event.target.value))}
+                    inputMode="numeric"
+                    maxLength={10}
+                    placeholder="10-digit mobile number"
                   />
+                  <span className="hint">{getPhoneInputHint(stakeholder.phone)}</span>
                 </div>
               </div>
             ))}
@@ -876,53 +937,28 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
 
       {!usingExistingSite ? (
         <div className="section-stack">
-          <div className="panel-header">
-            <div>
-              <h4>Current supplier</h4>
-              <p className="panel-copy">Choose manual mix or add one or more existing suppliers.</p>
-            </div>
+          <div className="field">
+            <label htmlFor="currentSupplier">Current supplier</label>
+            <input
+              id="currentSupplier"
+              list="currentSupplierOptions"
+              value={currentSupplier}
+              onChange={(event) => setCurrentSupplier(event.target.value)}
+              placeholder="Select or enter current supplier"
+            />
+
+            <datalist id="currentSupplierOptions">
+              <option value="No current supplier" />
+              <option value="Local supplier" />
+              <option value="Self mixing" />
+              <option value="Unknown" />
+              <option value="Other" />
+            </datalist>
+
+            <span className="hint">
+              Capture current supplier context. Later changes will require manager review.
+            </span>
           </div>
-          <div className="two-grid">
-            <label className="choice-card">
-              <input
-                checked={currentSupplierMode === "MANUAL_MIX"}
-                name="currentSupplierMode"
-                type="radio"
-                value="MANUAL_MIX"
-                onChange={() => setCurrentSupplierMode("MANUAL_MIX")}
-              />
-              <span>
-                <strong>Manual mix</strong>
-                <small>No ready-mix supplier is currently serving the site.</small>
-              </span>
-            </label>
-            <label className="choice-card">
-              <input
-                checked={currentSupplierMode === "ADD_SUPPLIER"}
-                name="currentSupplierMode"
-                type="radio"
-                value="ADD_SUPPLIER"
-                onChange={() => setCurrentSupplierMode("ADD_SUPPLIER")}
-              />
-              <span>
-                <strong>Add current supplier</strong>
-                <small>Capture one or more competitors already supplying the site.</small>
-              </span>
-            </label>
-          </div>
-          {currentSupplierMode === "ADD_SUPPLIER" ? (
-            <div className="section-stack">
-              {supplierInputs.map((supplier, index) => (
-                <div key={`supplier-${index}`} className="field">
-                  <label htmlFor={`supplier-${index}`}>Supplier {index + 1}</label>
-                  <input id={`supplier-${index}`} value={supplier} onChange={(event) => updateSupplierInput(index, event.target.value)} />
-                </div>
-              ))}
-              <button className="button-ghost" type="button" onClick={() => setSupplierInputs((current) => [...current, ""])}>
-                Add another supplier
-              </button>
-            </div>
-          ) : null}
         </div>
       ) : null}
 
@@ -934,16 +970,34 @@ export function SiteVisitFlowCard({ agentName, employeeId, leads, leadSites }: S
             value={expectedSupplyWindow}
             onChange={(event) => setExpectedSupplyWindow(event.target.value as ExpectedSupplyWindow)}
           >
-            {EXPECTED_SUPPLY_OPTIONS.map((entry) => (
-              <option key={entry.value} value={entry.value}>
-                {entry.label}
+            <option value="">Select expected supply...</option>
+            {EXPECTED_SUPPLY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
         </div>
+
         <div className="field">
           <label htmlFor="concreteGrade">Concrete grade</label>
-          <input id="concreteGrade" name="concreteGrade" defaultValue={selectedSite?.currentConcreteGrade ?? "M25"} required />
+          <select
+            id="concreteGrade"
+            value={concreteGrade}
+            onChange={(event) => setConcreteGrade(event.target.value)}
+            required
+          >
+            <option value="">Select grade</option>
+            {CONCRETE_GRADE_OPTIONS.map((grade) => (
+              <option key={grade} value={grade}>
+                {grade}
+              </option>
+            ))}
+          </select>
+
+          {concreteGrade === "OTHER" ? (
+            <span className="hint">OTHER grade will require manager review.</span>
+          ) : null}
         </div>
         <div className="field">
           <label htmlFor="quantityCum">Quantity (CUM)</label>

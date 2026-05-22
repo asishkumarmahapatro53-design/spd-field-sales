@@ -56,6 +56,7 @@ import type {
   DocumentTemplateType,
   ContactVerificationEvent,
   ContactVerificationChannel,
+  ContactVerificationStatus,
   ExpectedSupplyWindow,
   CreditRiskCategory,
   LedgerDecisionStatus,
@@ -105,10 +106,219 @@ const MAX_ODOMETER_STORED_BYTES = 2 * 1024 * 1024;
 const MAX_SITE_VISIT_STORED_BYTES = 5 * 1024 * 1024;
 const MAX_SITE_VISIT_VOICE_STORED_BYTES = 10 * 1024 * 1024;
 const MAX_AUTO_ODOMETER_DIFF_KM = 1;
-const MAX_REASONABLE_DAY_DISTANCE_KM = 250;
+const DEFAULT_MAX_REASONABLE_DAY_DISTANCE_KM = 250;
 const NEARBY_SITE_STRONG_MATCH_METERS = 75;
 const NEARBY_SITE_MODERATE_MATCH_METERS = 200;
 const MIN_QUOTATION_VALID_DAYS = 30;
+
+const SITE_VISIT_LOCATION_WARNING_METERS = Number(process.env.SITE_VISIT_LOCATION_WARNING_METERS ?? 100);
+const SITE_VISIT_LOCATION_REVIEW_METERS = Number(process.env.SITE_VISIT_LOCATION_REVIEW_METERS ?? 300);
+const SITE_VISIT_LOCATION_CRITICAL_METERS = Number(process.env.SITE_VISIT_LOCATION_CRITICAL_METERS ?? 1000);
+const SITE_VISIT_HIGH_QUANTITY_CUM = Number(process.env.SITE_VISIT_HIGH_QUANTITY_CUM ?? 500);
+
+const APPROVED_CONCRETE_GRADES = new Set([
+  "M5",
+  "M7.5",
+  "M10",
+  "M15",
+  "M20",
+  "M25",
+  "M30",
+  "M35",
+  "M40",
+  "M45",
+  "M50",
+  "PCC",
+  "OTHER",
+]);
+
+function normalizeConcreteGradeForVisit(value: string) {
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function getSiteVisitLocationSeverity(distanceMetersValue: number | null) {
+  if (distanceMetersValue === null || !Number.isFinite(distanceMetersValue)) {
+    return "UNKNOWN";
+  }
+
+  if (distanceMetersValue <= SITE_VISIT_LOCATION_WARNING_METERS) {
+    return "OK";
+  }
+
+  if (distanceMetersValue <= SITE_VISIT_LOCATION_REVIEW_METERS) {
+    return "WARNING";
+  }
+
+  if (distanceMetersValue <= SITE_VISIT_LOCATION_CRITICAL_METERS) {
+    return "REVIEW";
+  }
+
+  return "CRITICAL";
+}
+
+function isUnusualSiteVisitQuantity(quantityCum: number) {
+  return !Number.isFinite(quantityCum) || quantityCum <= 0 || quantityCum > SITE_VISIT_HIGH_QUANTITY_CUM;
+}
+
+function normalizeIndianMobile(value?: string | null) {
+  return `${value ?? ""}`.replace(/\D/g, "");
+}
+
+function isRepeatedDigitPhone(phone: string) {
+  return /^(\d)\1{9}$/.test(phone);
+}
+
+function isSequentialDummyPhone(phone: string) {
+  return ["1234567890", "0123456789", "9876543210"].includes(phone);
+}
+
+function validateStakeholderPhoneForSiteVisit(value?: string | null): {
+  normalizedPhone: string;
+  isValid: boolean;
+  reviewRequired: boolean;
+  reason: string | null;
+} {
+  const normalizedPhone = normalizeIndianMobile(value);
+
+  if (!normalizedPhone) {
+    return {
+      normalizedPhone,
+      isValid: false,
+      reviewRequired: true,
+      reason: "Stakeholder phone number is missing.",
+    };
+  }
+
+  if (normalizedPhone.length !== 10) {
+    return {
+      normalizedPhone,
+      isValid: false,
+      reviewRequired: true,
+      reason: `Stakeholder phone must be exactly 10 digits. Received ${normalizedPhone.length} digits.`,
+    };
+  }
+
+  if (!/^[6-9]/.test(normalizedPhone)) {
+    return {
+      normalizedPhone,
+      isValid: false,
+      reviewRequired: true,
+      reason: `Stakeholder phone ${normalizedPhone} does not start with 6, 7, 8, or 9.`,
+    };
+  }
+
+  if (isRepeatedDigitPhone(normalizedPhone)) {
+    return {
+      normalizedPhone,
+      isValid: false,
+      reviewRequired: true,
+      reason: `Stakeholder phone ${normalizedPhone} appears to be a repeated dummy number.`,
+    };
+  }
+
+  if (isSequentialDummyPhone(normalizedPhone)) {
+    return {
+      normalizedPhone,
+      isValid: false,
+      reviewRequired: true,
+      reason: `Stakeholder phone ${normalizedPhone} appears to be a common dummy sequence.`,
+    };
+  }
+
+  return {
+    normalizedPhone,
+    isValid: true,
+    reviewRequired: false,
+    reason: null,
+  };
+}
+
+function getStakeholderPhoneValue(stakeholder: {
+  phone?: string | null;
+  phoneNumber?: string | null;
+  mobile?: string | null;
+  stakeholderPhone?: string | null;
+  contactPhone?: string | null;
+}) {
+  return (
+    stakeholder.phone ??
+    stakeholder.phoneNumber ??
+    stakeholder.mobile ??
+    stakeholder.stakeholderPhone ??
+    stakeholder.contactPhone ??
+    null
+  );
+}
+
+function getInitialWhatsAppAvailabilityStatus() {
+  return {
+    whatsappCheckStatus: "NOT_CHECKED",
+    whatsappCheckMethod: "NO_MESSAGE_SENT",
+    whatsappCheckNote:
+      "WhatsApp availability has not been checked. The system must not send a WhatsApp message for silent availability verification.",
+  };
+}
+
+// TODO: Actual WhatsApp availability and missed-call verification must be implemented
+// through approved providers only. This backend must not send WhatsApp messages for
+// availability checks. Until provider integration is added, the app stores only
+// UNVERIFIED / INVALID and NOT_CHECKED statuses.
+
+function normalizePhoneForDuplicateCheck(value?: string | null) {
+  return `${value ?? ""}`.replace(/\D/g, "");
+}
+
+function normalizePhoneDigitsForMatch(value?: string | null) {
+  const digits = `${value ?? ""}`.replace(/\D/g, "");
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+function getVisitStakeholderPhones(
+  stakeholders: Array<{
+    phone?: string | null;
+    phoneNumber?: string | null;
+    mobile?: string | null;
+    stakeholderPhone?: string | null;
+    contactPhone?: string | null;
+  }>,
+) {
+  return Array.from(
+    new Set(
+      stakeholders
+        .map((stakeholder) =>
+          normalizePhoneForDuplicateCheck(
+            stakeholder.phone ??
+              stakeholder.phoneNumber ??
+              stakeholder.mobile ??
+              stakeholder.stakeholderPhone ??
+              stakeholder.contactPhone ??
+              null,
+          ),
+        )
+        .filter((phone) => phone.length === 10),
+    ),
+  );
+}
+
+function getSiteVisitDateKey(value?: string | null) {
+  return toDateKey(value ?? nowIso());
+}
+
+function getConfiguredMaxDailyDistanceKm() {
+  const configured = Number(
+    process.env.ODOMETER_MAX_DAILY_DISTANCE_KM ?? DEFAULT_MAX_REASONABLE_DAY_DISTANCE_KM,
+  );
+
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_MAX_REASONABLE_DAY_DISTANCE_KM;
+  }
+
+  return configured;
+}
+
+function shouldZeroDistanceRequireManagerReview() {
+  return process.env.ODOMETER_ZERO_DISTANCE_REQUIRES_MANAGER_REVIEW?.trim().toLowerCase() !== "false";
+}
 
 const INVALID_PHONE_PATTERNS = new Set([
   "0000000000",
@@ -417,6 +627,103 @@ function requireLeadSite(database: Database, leadId: string, siteId: string | nu
   }
 
   return database.leadSites.find((entry) => entry.id === siteId && entry.leadId === leadId) ?? null;
+}
+
+function normalizeGradeKeyForApproval(value: string) {
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function buildApprovalVariationReasons(
+  approvalItems: ApprovalRequestItem[],
+  quotation: InformalQuotationRequest | null,
+  input: CreateApprovalRequestInput,
+) {
+  if (!quotation) {
+    return ["No approved informal quotation is linked to this final approval request."];
+  }
+
+  const reasons: string[] = [];
+
+  const quotationItemsByGrade = new Map(
+    quotation.items.map((item) => [normalizeGradeKeyForApproval(item.grade), item]),
+  );
+
+  for (const approvalItem of approvalItems) {
+    const gradeKey = normalizeGradeKeyForApproval(approvalItem.grade);
+    const quotedItem = quotationItemsByGrade.get(gradeKey);
+
+    if (!quotedItem) {
+      reasons.push(`Grade ${approvalItem.grade} is not present in the linked quotation.`);
+      continue;
+    }
+
+    if (Number(approvalItem.quotedPrice) !== Number(quotedItem.pricePerCum)) {
+      reasons.push(
+        `Rate variation for ${approvalItem.grade}: quotation rate ${quotedItem.pricePerCum}, final approval rate ${approvalItem.quotedPrice}.`,
+      );
+    }
+  }
+
+  const approvalGrades = new Set(approvalItems.map((item) => normalizeGradeKeyForApproval(item.grade)));
+  const extraQuotedGrades = quotation.items
+    .filter((item) => !approvalGrades.has(normalizeGradeKeyForApproval(item.grade)))
+    .map((item) => item.grade);
+
+  if (extraQuotedGrades.length) {
+    reasons.push(`Linked quotation contains additional grade(s) not included in approval: ${extraQuotedGrades.join(", ")}.`);
+  }
+
+  if (quotation.paymentType && quotation.paymentType !== input.paymentType) {
+    reasons.push(`Payment type changed from quotation ${quotation.paymentType} to approval ${input.paymentType}.`);
+  }
+
+  if (Math.abs(Number(quotation.oneWayDistanceKm) - Number(input.oneWayDistanceKm)) > 0.5) {
+    reasons.push(
+      `Distance changed from quotation ${quotation.oneWayDistanceKm} km to approval ${input.oneWayDistanceKm} km.`,
+    );
+  }
+
+  if (Number(quotation.trafficPostCount) !== Number(input.trafficCount)) {
+    reasons.push(
+      `Traffic post count changed from quotation ${quotation.trafficPostCount} to approval ${input.trafficCount}.`,
+    );
+  }
+
+  return reasons;
+}
+
+function findOpenFinalApprovalForSite(
+  database: Database,
+  siteId: string,
+  approvalItems: ApprovalRequestItem[],
+) {
+  const gradeSet = new Set(approvalItems.map((item) => normalizeGradeKeyForApproval(item.grade)));
+
+  return database.approvalRequests.find((entry) => {
+    if (entry.siteId !== siteId) {
+      return false;
+    }
+
+    if (entry.status === "REJECTED") {
+      return false;
+    }
+
+    const entryGradeSet = new Set(entry.items.map((item) => normalizeGradeKeyForApproval(item.grade)));
+    const hasCommonGrade = [...gradeSet].some((grade) => entryGradeSet.has(grade));
+
+    return hasCommonGrade && (entry.status === "PENDING" || entry.status === "APPROVED");
+  });
+}
+
+function finalApprovalDecisionNeedsManagerNote(approval: ApprovalRequest) {
+  return Boolean(
+    approval.rateValidationStatus === "BELOW_MINIMUM" ||
+      approval.routeFeasibilityStatus === "MARGINAL" ||
+      approval.routeFeasibilityStatus === "NOT_FEASIBLE" ||
+      approval.quotationValidityStatus === "NOT_LINKED" ||
+      approval.directFinalApprovalReason ||
+      approval.variationNotes,
+  );
 }
 
 function summarizeApprovalLineItems(items: ApprovalRequestItem[]) {
@@ -1417,6 +1724,7 @@ export async function rejectOdometerReading(user: User, readingId: string, note:
 }
 
 // MOD-012/014: Continuity check — previous END <= current START <= current END.
+
 function checkOdometerContinuity(
   database: Database,
   userId: string,
@@ -1444,17 +1752,27 @@ function checkOdometerContinuity(
       .sort((left, right) => compareIsoAsc(right.capturedAt, left.capturedAt))[0];
 
     if (startReading?.finalValue !== null && startReading?.finalValue !== undefined) {
-      const dayDistance = proposedValue - startReading.finalValue;
+      const dayDistance = Math.round((proposedValue - startReading.finalValue) * 10) / 10;
+      const maxDailyDistanceKm = getConfiguredMaxDailyDistanceKm();
+
       if (dayDistance < 0) {
         return {
           status: "REVERSAL",
           note: `END reading (${proposedValue}) is less than START reading (${startReading.finalValue}) for ${dateKey}. Negative same-day distance is not allowed.`,
         };
       }
-      if (dayDistance > MAX_REASONABLE_DAY_DISTANCE_KM) {
+
+      if (dayDistance === 0 && shouldZeroDistanceRequireManagerReview()) {
         return {
           status: "GAP",
-          note: `Same-day distance ${dayDistance} km is above the configured normal field threshold of ${MAX_REASONABLE_DAY_DISTANCE_KM} km. Manager review required.`,
+          note: `Same-day distance is 0 km for ${dateKey}. Manager review and a valid no-travel remark are required before reimbursement.`,
+        };
+      }
+
+      if (dayDistance > maxDailyDistanceKm) {
+        return {
+          status: "GAP",
+          note: `Same-day distance ${dayDistance} km is above the configured normal field threshold of ${maxDailyDistanceKm} km. Manager review required.`,
         };
       }
     }
@@ -1489,7 +1807,8 @@ function checkOdometerContinuity(
     return { status: "OK", note: null };
   }
 
-  const diff = proposedValue - previousEndReading.finalValue;
+  const diff = Math.round((proposedValue - previousEndReading.finalValue) * 10) / 10;
+  const maxDailyDistanceKm = getConfiguredMaxDailyDistanceKm();
 
   if (diff < 0) {
     return {
@@ -1498,10 +1817,10 @@ function checkOdometerContinuity(
     };
   }
 
-  if (diff > MAX_REASONABLE_DAY_DISTANCE_KM) {
+  if (diff > maxDailyDistanceKm) {
     return {
       status: "GAP",
-      note: `Gap of ${diff} km between previous END (${previousEndReading.finalValue}) on ${previousSession.date} and current START (${proposedValue}). Manager review required.`,
+      note: `Gap of ${diff} km between previous END (${previousEndReading.finalValue}) on ${previousSession.date} and current START (${proposedValue}) is above the configured threshold of ${maxDailyDistanceKm} km. Manager review required.`,
     };
   }
 
@@ -1610,7 +1929,113 @@ export async function submitAgentManualReading(user: User, readingId: string, ma
   });
 }
 
-// MOD-010: Correct an odometer reading (creates version history)
+// MOD-009 / MOD-012: Manager-only scoped reopen for claimed odometer dates.
+// This does not unlock all old dates. It only reopens one selected reading/date/type.
+export async function reopenOdometerReadingForCorrection(
+  user: User,
+  readingId: string,
+  reason: string,
+) {
+  assertRole(user, ["MANAGER"]);
+
+  const reopenReason = reason.trim();
+  if (!reopenReason) {
+    throw new Error("Reopen reason is required.");
+  }
+
+  return updateDatabase((database) => {
+    const reading = database.odometerReadings.find((entry) => entry.id === readingId);
+
+    if (!reading) {
+      throw new Error("Odometer reading not found.");
+    }
+
+    if (reading.status === "DISCARDED") {
+      throw new Error("Discarded readings cannot be reopened for correction.");
+    }
+
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (!session) {
+      throw new Error("Workday session for this odometer reading was not found.");
+    }
+
+    const workdayDate = session.date ?? toDateKey(reading.capturedAt);
+    const lock = getOdometerLockStatus(database, session.userId, workdayDate);
+
+    if (lock.status === "PAID_LOCKED") {
+      throw new Error("Paid reimbursement dates cannot be reopened directly. Use paid correction adjustment instead.");
+    }
+
+    const sameDayReadings = database.odometerReadings.filter(
+      (entry) =>
+        entry.sessionId === session.id &&
+        entry.isActiveReading !== false &&
+        entry.status !== "DISCARDED",
+    );
+
+    const startReading = sameDayReadings.find((entry) => entry.type === "START") ?? null;
+    const endReading = sameDayReadings.find((entry) => entry.type === "END") ?? null;
+    const now = nowIso();
+
+    reading.lockStatus = "REOPENED_FOR_CORRECTION";
+    reading.reopenedForCorrectionBy = user.id;
+    reading.reopenedForCorrectionAt = now;
+    reading.reopenedForCorrectionReason = reopenReason;
+
+    database.odometerCorrections ??= [];
+    const reopenEntry = {
+      id: randomUUID(),
+      readingId: reading.id,
+      version: reading.correctionVersion ?? 1,
+      type: "REOPEN" as const,
+      oldValue: reading.finalValue,
+      newValue: null,
+      reason: reopenReason,
+      approvedBy: user.id,
+      approvedAt: now,
+      createdBy: user.id,
+      createdAt: now,
+      linkedClaimId: lock.claimId,
+      dateKey: workdayDate,
+      status: "REOPENED" as const,
+
+      agentId: session.userId,
+      workdayDate,
+      readingType: reading.type,
+      reopenScope: "SINGLE_DATE_SINGLE_TYPE" as const,
+      reopenedBy: user.id,
+      reopenedAt: now,
+
+      oldStartReadingId: startReading?.id ?? null,
+      oldEndReadingId: endReading?.id ?? null,
+      oldStartValue: startReading?.finalValue ?? null,
+      oldEndValue: endReading?.finalValue ?? null,
+
+      selectedReadingId: reading.id,
+      newReadingId: null,
+    };
+
+    database.odometerCorrections.unshift(reopenEntry);
+
+    logAudit(
+      database,
+      user,
+      "OdometerReading",
+      reading.id,
+      "REOPEN_FOR_CORRECTION",
+      `Manager reopened ${reading.type} reading for ${workdayDate}. Reason: ${reopenReason}.`,
+    );
+
+    return {
+      reading,
+      reopenEntry,
+    };
+  });
+}
+
+// MOD-010 / MOD-012: Correct an odometer reading using immutable versioning.
+// Old reading becomes inactive. New corrected reading becomes active.
+// Paid claims are still handled through createPaidOdometerCorrectionAdjustment().
 export async function correctOdometerReading(
   user: User,
   readingId: string,
@@ -1622,7 +2047,8 @@ export async function correctOdometerReading(
     throw new Error("Corrected reading must be a non-negative number.");
   }
 
-  if (!input.reason.trim()) {
+  const correctionReason = input.reason.trim();
+  if (!correctionReason) {
     throw new Error("Correction reason is required.");
   }
 
@@ -1637,68 +2063,110 @@ export async function correctOdometerReading(
       throw new Error("Cannot correct a discarded reading.");
     }
 
-    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
-    const readingDateKey = session?.date ?? toDateKey(reading.capturedAt);
-    const agentId = session?.userId ?? "";
-    const lock = agentId ? getOdometerLockStatus(database, agentId, readingDateKey) : { status: "OPEN" as OdometerLockStatus, claimId: null, message: null };
-    if (readingDateKey) {
-      if (lock.status === "PAID_LOCKED") {
-        throw new Error("Paid reimbursement dates cannot be directly modified. Create an adjustment request outside the original paid claim.");
-      }
+    if (reading.isActiveReading === false) {
+      throw new Error("This reading is already inactive. Correct the current active reading instead.");
+    }
 
-      if (lock.status === "CLAIMED") {
-        reading.lockStatus = "REOPENED_FOR_CORRECTION";
-        reading.reopenedForCorrectionBy = user.id;
-        reading.reopenedForCorrectionAt = nowIso();
-        reading.reopenedForCorrectionReason = input.reason.trim();
-      }
+    const session = database.workdaySessions.find((entry) => entry.id === reading.sessionId);
+    if (!session) {
+      throw new Error("Workday session for this odometer reading was not found.");
+    }
+
+    const readingDateKey = session.date ?? toDateKey(reading.capturedAt);
+    const lock = getOdometerLockStatus(database, session.userId, readingDateKey);
+
+    if (lock.status === "PAID_LOCKED") {
+      throw new Error("Paid reimbursement dates cannot be directly modified. Create a paid reimbursement adjustment instead.");
+    }
+
+    if (lock.status === "CLAIMED" && reading.lockStatus !== "REOPENED_FOR_CORRECTION") {
+      throw new Error("This claimed date must be reopened by manager before correction.");
     }
 
     const now = nowIso();
     const previousValue = reading.finalValue;
     const previousVersion = reading.correctionVersion ?? 1;
 
-    // Create correction history entry
+    const newReading: OdometerReading = {
+      ...reading,
+      id: randomUUID(),
+
+      finalValue: Math.round(input.newValue * 10) / 10,
+      managerFinalReading: Math.round(input.newValue * 10) / 10,
+      agentEnteredReading: reading.agentEnteredReading ?? null,
+
+      previousReadingValue: previousValue,
+      correctionVersion: previousVersion + 1,
+      correctionReason,
+      correctionApprovedBy: user.id,
+      correctionApprovedAt: now,
+
+      status: "MANUAL_VERIFIED",
+      verifiedBy: user.id,
+      verificationNote: `Manager correction version ${previousVersion + 1}. Previous value: ${previousValue ?? "N/A"}. New value: ${input.newValue}. Reason: ${correctionReason}.`,
+      managerReviewedAt: now,
+      managerRemark: correctionReason,
+      reviewReason: null,
+
+      lockStatus: "OPEN",
+      reopenedForCorrectionBy: reading.reopenedForCorrectionBy,
+      reopenedForCorrectionAt: reading.reopenedForCorrectionAt,
+      reopenedForCorrectionReason: reading.reopenedForCorrectionReason,
+
+      replacesReadingId: reading.id,
+      replacedByReadingId: null,
+      isActiveReading: true,
+    };
+
+    reading.isActiveReading = false;
+    reading.replacedByReadingId = newReading.id;
+    reading.lockStatus = "REOPENED_FOR_CORRECTION";
+
+    database.odometerReadings.unshift(newReading);
+
     database.odometerCorrections ??= [];
-    database.odometerCorrections.push({
+    database.odometerCorrections.unshift({
       id: randomUUID(),
       readingId: reading.id,
       version: previousVersion,
       type: "READING_UPDATE",
       oldValue: previousValue,
-      newValue: input.newValue,
-      reason: input.reason.trim(),
+      newValue: newReading.finalValue,
+      reason: correctionReason,
       approvedBy: user.id,
       approvedAt: now,
       createdBy: user.id,
       createdAt: now,
       linkedClaimId: lock.claimId,
       dateKey: readingDateKey,
-      status: lock.status === "CLAIMED" ? "REOPENED" : "APPLIED",
-    });
+      status: "APPLIED",
 
-    reading.previousReadingValue = previousValue;
-    reading.finalValue = input.newValue;
-    reading.managerFinalReading = input.newValue;
-    reading.correctionVersion = previousVersion + 1;
-    reading.correctionReason = input.reason.trim();
-    reading.correctionApprovedBy = user.id;
-    reading.correctionApprovedAt = now;
-    reading.status = "MANUAL_VERIFIED";
-    reading.verifiedBy = user.id;
-    reading.managerReviewedAt = now;
-    reading.managerRemark = input.reason.trim();
-    reading.lockStatus = lock.status === "CLAIMED" ? "REOPENED_FOR_CORRECTION" : "OPEN";
+      agentId: session.userId,
+      workdayDate: readingDateKey,
+      readingType: reading.type,
+      reopenScope: "SINGLE_DATE_SINGLE_TYPE",
+      reopenedBy: reading.reopenedForCorrectionBy ?? user.id,
+      reopenedAt: reading.reopenedForCorrectionAt ?? now,
+
+      oldStartReadingId: reading.type === "START" ? reading.id : null,
+      oldEndReadingId: reading.type === "END" ? reading.id : null,
+      oldStartValue: reading.type === "START" ? previousValue : null,
+      oldEndValue: reading.type === "END" ? previousValue : null,
+
+      selectedReadingId: reading.id,
+      newReadingId: newReading.id,
+    });
 
     logAudit(
       database,
       user,
       "OdometerReading",
-      reading.id,
-      "CORRECTION",
-      `Manager corrected reading from ${previousValue} to ${input.newValue}. Reason: ${input.reason.trim()}.`,
+      newReading.id,
+      "CORRECTION_VERSION_CREATED",
+      `Manager corrected ${reading.type} reading for ${readingDateKey}. Old reading ${reading.id} inactive, new reading ${newReading.id} active. Previous value: ${previousValue}. New value: ${newReading.finalValue}. Reason: ${correctionReason}.`,
     );
-    return reading;
+
+    return newReading;
   });
 }
 
@@ -2240,16 +2708,53 @@ export async function recordSiteDirectionUse(user: User, siteId: string) {
       throw new Error("You can only open directions for your own sites.");
     }
 
-    if (!site.latLng && !site.siteAddress.trim()) {
-      throw new Error("This site has no coordinate or address. Update site location before opening directions.");
+    const locationCorrectionInfo = getSiteLocationCorrectionInfo(site);
+
+    if (!site.latLng && !site.siteAddress?.trim()) {
+      throw new Error("This site has no coordinates or address. Update site location before opening Mappls directions.");
     }
 
     site.directionsUsageCount = (site.directionsUsageCount ?? 0) + 1;
     site.directionsLastUsedAt = nowIso();
     site.lastDirectionsUsedBy = user.id;
-    logAudit(database, user, "LeadSite", site.id, "DIRECTIONS_OPENED", `Opened map directions for ${site.siteName}.`);
+
+    logAudit(
+      database,
+      user,
+      "LeadSite",
+      site.id,
+      "DIRECTIONS_OPENED",
+      `Opened Mappls directions for ${site.siteName}. ${
+        locationCorrectionInfo.locationCorrectionRequired
+          ? locationCorrectionInfo.locationCorrectionReason
+          : "Coordinates available."
+      }`,
+    );
     return site;
   });
+}
+
+function getSiteLocationCorrectionInfo(site: Pick<LeadSite, "latLng" | "siteAddress">) {
+  if (site.latLng) {
+    return {
+      locationCorrectionRequired: false,
+      locationCorrectionReason: null,
+    };
+  }
+
+  if (site.siteAddress?.trim()) {
+    return {
+      locationCorrectionRequired: true,
+      locationCorrectionReason:
+        "Site coordinates are missing. Mappls directions may use address fallback, but site GPS location should be corrected.",
+    };
+  }
+
+  return {
+    locationCorrectionRequired: true,
+    locationCorrectionReason:
+      "Both site coordinates and address are missing. This site needs location correction before reliable map usage.",
+  };
 }
 
 function getLeadStagePinColor(stage: LeadStage): MapPinColor {
@@ -2286,6 +2791,7 @@ function buildSiteMapMarkers(database: Database, user: User): SiteMapMarker[] {
       const lead = visibleLeads.find((entry) => entry.id === site.leadId);
       const leadStage = lead?.stage ?? "TALKS";
       const primaryStakeholder = site.stakeholders.find((stakeholder) => stakeholder.role !== "FOUND_NO_ONE" && stakeholder.name.trim()) ?? null;
+      const locationCorrectionInfo = getSiteLocationCorrectionInfo(site);
       return {
         siteId: site.id,
         leadId: site.leadId,
@@ -2304,6 +2810,10 @@ function buildSiteMapMarkers(database: Database, user: User): SiteMapMarker[] {
         quantityCum: site.currentQuantityCum,
         lastVisitedAt: site.lastVisitedAt,
         missingLocation: !site.latLng,
+        locationCorrectionRequired: locationCorrectionInfo.locationCorrectionRequired,
+        locationCorrectionReason: locationCorrectionInfo.locationCorrectionReason,
+        directionsUsageCount: site.directionsUsageCount ?? 0,
+        directionsLastUsedAt: site.directionsLastUsedAt ?? null,
       } satisfies SiteMapMarker;
     })
     .sort((left, right) => compareIsoAsc(right.lastVisitedAt, left.lastVisitedAt));
@@ -2571,6 +3081,8 @@ export async function requestStakeholderContactVerification(user: User, stakehol
     }
 
     const now = nowIso();
+    const eventStatus: ContactVerificationStatus =
+      channel === "WHATSAPP" && result.status === "SENT" ? "VERIFIED" : result.status;
     const event: ContactVerificationEvent = {
       id: randomUUID(),
       stakeholderMasterId: target.id,
@@ -2579,18 +3091,18 @@ export async function requestStakeholderContactVerification(user: User, stakehol
       phone: target.phone,
       channel,
       provider: result.provider,
-      status: result.status,
+      status: eventStatus,
       providerMessageId: result.providerMessageId,
       error: result.error,
       requestedBy: user.id,
       requestedAt: now,
-      verifiedAt: null,
+      verifiedAt: eventStatus === "VERIFIED" ? now : null,
       metadata: result.metadata,
     };
 
     database.contactVerificationEvents.unshift(event);
     target.updatedAt = now;
-    target.lastVerificationError = result.error;
+    target.lastVerificationError = eventStatus === "VERIFIED" ? null : result.error;
 
     if (channel === "CALL") {
       target.lastCallVerificationAt = now;
@@ -2598,7 +3110,8 @@ export async function requestStakeholderContactVerification(user: User, stakehol
     } else {
       target.lastWhatsappVerificationAt = now;
       target.phoneVerificationStatus =
-        result.status === "SENT" ? "WHATSAPP_SENT" : result.status === "FAILED" ? "FAILED" : target.phoneVerificationStatus;
+        result.status === "SENT" ? "VERIFIED" : result.status === "FAILED" ? "FAILED" : target.phoneVerificationStatus;
+      target.phoneVerifiedAt = result.status === "SENT" ? now : target.phoneVerifiedAt;
     }
 
     syncStakeholderContactVerification(database, target);
@@ -2608,7 +3121,7 @@ export async function requestStakeholderContactVerification(user: User, stakehol
       "StakeholderMaster",
       target.id,
       `${channel}_VERIFICATION_${result.status}`,
-      `${channel === "CALL" ? "Call" : "WhatsApp"} verification ${result.status.toLowerCase()} for ${target.name}.`,
+      `${channel === "CALL" ? "Call" : "WhatsApp"} verification ${eventStatus.toLowerCase()} for ${target.name}.`,
     );
 
     return { stakeholder: target, event };
@@ -2626,7 +3139,7 @@ export async function markStakeholderContactVerified(user: User, stakeholderMast
     }
 
     const now = nowIso();
-    target.phoneVerificationStatus = channel === "WHATSAPP" ? "WHATSAPP_CHECKED" : "CALL_VERIFIED";
+    target.phoneVerificationStatus = channel === "WHATSAPP" ? "VERIFIED" : "CALL_VERIFIED";
     target.phoneVerifiedAt = now;
     target.updatedAt = now;
     target.lastVerificationError = null;
@@ -2697,7 +3210,7 @@ export async function recordWhatsappVerificationReply(input: {
     });
 
     if (input.verified) {
-      target.phoneVerificationStatus = "WHATSAPP_CHECKED";
+      target.phoneVerificationStatus = "VERIFIED";
       target.phoneVerifiedAt = now;
       target.lastWhatsappVerificationAt = now;
       target.lastVerificationError = null;
@@ -2846,7 +3359,38 @@ export async function createSiteVisit(
 ) {
   assertRole(user, ["SALES_AGENT"]);
   const upload = await prepareSiteVisitUpload(input);
-  const stakeholders = dedupeStakeholders(normalizeStakeholders(input.stakeholders));
+  const baseStakeholders = dedupeStakeholders(normalizeStakeholders(input.stakeholders));
+
+  const stakeholderPhoneValidations = (baseStakeholders as any[]).map((stakeholder) => {
+    const rawPhone = getStakeholderPhoneValue(stakeholder);
+    return {
+      stakeholder,
+      ...validateStakeholderPhoneForSiteVisit(rawPhone),
+    };
+  });
+
+  const invalidStakeholderPhoneReasons = stakeholderPhoneValidations
+    .filter((entry) => entry.reviewRequired)
+    .map((entry) => entry.reason)
+    .filter((reason): reason is string => Boolean(reason));
+
+  const stakeholdersWithNormalizedPhones = (baseStakeholders as any[]).map((stakeholder) => {
+    const validation = validateStakeholderPhoneForSiteVisit(getStakeholderPhoneValue(stakeholder));
+    const whatsappStatus = getInitialWhatsAppAvailabilityStatus();
+
+    return {
+      ...stakeholder,
+      phone: validation.normalizedPhone || stakeholder.phone,
+      phoneVerificationStatus: validation.isValid ? "UNVERIFIED" : "INVALID",
+      phoneVerificationReason: validation.reason,
+      whatsappCheckStatus: validation.isValid ? whatsappStatus.whatsappCheckStatus : "NOT_AVAILABLE",
+      whatsappCheckMethod: whatsappStatus.whatsappCheckMethod,
+      whatsappCheckNote: whatsappStatus.whatsappCheckNote,
+      callVerificationStatus: "NOT_STARTED",
+    };
+  });
+
+  const stakeholders = stakeholdersWithNormalizedPhones as any;
   const metadataFallback =
     !input.photoWatermarkAddress.trim() || !input.photoCapturedAt || !input.detectedLatLng
       ? await ocrService.extractSiteVisitMetadata({
@@ -2889,6 +3433,7 @@ export async function createSiteVisit(
       expectedSupplyWindow: input.expectedSupplyWindow,
     });
   const resolvedCurrentSupplier = normalizeCurrentSupplier(input.currentSupplier);
+  const normalizedConcreteGrade = normalizeConcreteGradeForVisit(input.concreteGrade);
   // MOD-016/018: lead score must be backend-calculated, not trusted from agent input.
   const resolvedScore = suggestLeadScore({
     expectedSupplyWindow: input.expectedSupplyWindow,
@@ -2934,7 +3479,7 @@ export async function createSiteVisit(
         builderName: "",
         supervisorName: "",
         supervisorPhone: "",
-        currentConcreteGrade: input.concreteGrade,
+        currentConcreteGrade: normalizedConcreteGrade,
         currentQuantityCum: input.quantityCum,
         primarySiteId: null,
         primarySiteLatLng: null,
@@ -2963,7 +3508,7 @@ export async function createSiteVisit(
         currentSupplier: resolvedCurrentSupplier,
         expectedSupplyWindow: input.expectedSupplyWindow,
         futureScope: input.futureScope,
-        currentConcreteGrade: input.concreteGrade,
+        currentConcreteGrade: normalizedConcreteGrade,
         currentQuantityCum: input.quantityCum,
         score: resolvedScore,
         createdAt: visitedAt,
@@ -2996,7 +3541,7 @@ export async function createSiteVisit(
       site.stakeholders = dedupeStakeholders([...site.stakeholders, ...stakeholders]);
       site.expectedSupplyWindow = input.expectedSupplyWindow;
       site.futureScope = input.futureScope;
-      site.currentConcreteGrade = input.concreteGrade;
+      site.currentConcreteGrade = normalizedConcreteGrade;
       site.currentQuantityCum = input.quantityCum;
       site.score = resolvedScore;
       if (compareIsoAsc(site.lastVisitedAt, visitedAt) < 0) {
@@ -3026,12 +3571,14 @@ export async function createSiteVisit(
       throw new Error("A site visit for this agent, site, and captured date already exists. Add a manager-approved revisit reason instead of creating a duplicate visit.");
     }
 
-    const foundNoOneRepeatCount = database.siteVisits.filter(
-      (entry) =>
-        entry.siteId === site.id &&
-        sameDaySessionIds.includes(entry.sessionId) &&
-        entry.contactPresenceStatus === "FOUND_NO_ONE",
-    ).length;
+    const foundNoOneRepeatCount = database.siteVisits.filter((entry) => {
+      if (entry.siteId !== site.id || entry.contactPresenceStatus !== "FOUND_NO_ONE") {
+        return false;
+      }
+
+      const entrySession = database.workdaySessions.find((sessionEntry) => sessionEntry.id === entry.sessionId);
+      return entrySession?.userId === user.id;
+    }).length;
 
     const verification: { status: SiteLocationVerificationStatus; distanceMeters: number | null } =
       isNewSite || !input.siteId
@@ -3047,16 +3594,170 @@ export async function createSiteVisit(
       verification.status === "MATCHED" || verification.status === "NOT_APPLICABLE"
         ? "AUTO_APPROVED"
         : "PENDING_REVIEW";
+
+    const photoReused = database.siteVisits.some(
+      (entry) => entry.arrivalPhotoHash && entry.arrivalPhotoHash === arrivalPhotoHash,
+    );
+    const locationSeverity = getSiteVisitLocationSeverity(verification.distanceMeters);
+    const gradeRequiresReview =
+      !APPROVED_CONCRETE_GRADES.has(normalizedConcreteGrade) || normalizedConcreteGrade === "OTHER";
+    const quantityRequiresReview = isUnusualSiteVisitQuantity(input.quantityCum);
+    const missingGpsProof =
+      !detectedLatLng || !visitedAt || !detectedAddress || !input.photoCapturedAt;
+
+    const stakeholderPhonesForDuplicateCheck = getVisitStakeholderPhones(stakeholders as any);
+
+    const duplicatePhoneMatches = stakeholderPhonesForDuplicateCheck.flatMap((phone) => {
+      const matches: string[] = [];
+
+      for (const existingVisit of database.siteVisits) {
+        const existingStakeholders = Array.isArray((existingVisit as any).stakeholders)
+          ? ((existingVisit as any).stakeholders as any[])
+          : [];
+
+        const existingPhones = getVisitStakeholderPhones(existingStakeholders);
+
+        if (existingPhones.includes(phone)) {
+          matches.push(`Phone ${phone} already used in site visit ${existingVisit.id}`);
+        }
+      }
+
+      for (const existingSite of database.leadSites ?? []) {
+        const sitePhone = normalizePhoneForDuplicateCheck(
+          (existingSite as any).stakeholderPhone ??
+            (existingSite as any).phone ??
+            (existingSite as any).contactPhone ??
+            (existingSite as any).primaryStakeholderPhone ??
+            null,
+        );
+
+        if (sitePhone === phone) {
+          matches.push(
+            `Phone ${phone} already linked with site ${
+              (existingSite as any).siteName ?? existingSite.id
+            }`,
+          );
+        }
+      }
+
+      for (const existingLead of database.leads ?? []) {
+        const leadPhone = normalizePhoneForDuplicateCheck(
+          (existingLead as any).stakeholderPhone ??
+            (existingLead as any).phone ??
+            (existingLead as any).contactPhone ??
+            (existingLead as any).primaryStakeholderPhone ??
+            null,
+        );
+
+        if (leadPhone === phone) {
+          matches.push(
+            `Phone ${phone} already linked with lead ${
+              (existingLead as any).leadName ?? (existingLead as any).name ?? existingLead.id
+            }`,
+          );
+        }
+      }
+
+      return matches;
+    });
+
+    const revisitDateKey = getSiteVisitDateKey(visitedAt ?? input.photoCapturedAt ?? null);
+
+    const hasRevisitReason = Boolean((input as any).revisitReason?.trim?.());
+
+    const sameAgentSiteDateVisit = database.siteVisits.find((existingVisit) => {
+      if (existingVisit.siteId !== site.id) {
+        return false;
+      }
+
+      const existingStatus = `${(existingVisit as any).status ?? ""}`.toUpperCase();
+      if (existingStatus === "DISCARDED" || existingStatus === "REJECTED") {
+        return false;
+      }
+
+      const existingSession = database.workdaySessions.find(
+        (session) => session.id === existingVisit.sessionId,
+      );
+
+      if (existingSession?.userId !== user.id) {
+        return false;
+      }
+
+      const existingVisitDate = getSiteVisitDateKey(
+        (existingVisit as any).visitedAt ?? (existingVisit as any).createdAt ?? null,
+      );
+
+      return existingVisitDate === revisitDateKey;
+    });
+
+    const isNewSiteUnderExistingLead = Boolean((input as any).leadId) && !(input as any).siteId;
+
+    const nearbySameLeadSite =
+      isNewSiteUnderExistingLead && detectedLatLng
+        ? (database.leadSites ?? []).find((existingSite) => {
+            if (existingSite.leadId !== (input as any).leadId || existingSite.id === site.id) {
+              return false;
+            }
+
+            const existingLat = Number(
+              (existingSite as any).latitude ??
+                (existingSite as any).lat ??
+                (existingSite as any).siteLat ??
+                (existingSite as any).gpsLat,
+            );
+
+            const existingLng = Number(
+              (existingSite as any).longitude ??
+                (existingSite as any).lng ??
+                (existingSite as any).siteLng ??
+                (existingSite as any).gpsLng,
+            );
+
+            if (!Number.isFinite(existingLat) || !Number.isFinite(existingLng)) {
+              return false;
+            }
+
+            const distance = distanceMeters(
+              { lat: detectedLatLng.lat, lng: detectedLatLng.lng },
+              { lat: existingLat, lng: existingLng }
+            );
+
+            return distance <= 300;
+          })
+        : null;
+
     const managerReviewReasons = [
+      missingGpsProof ? "GPS/date/location proof is missing or unreadable from site visit photo" : null,
       gpsReviewStatus === "PENDING_REVIEW" ? `GPS ${verification.status}` : null,
+      locationSeverity === "REVIEW" ? `Location mismatch is ${verification.distanceMeters} meters and requires manager review` : null,
+      locationSeverity === "CRITICAL" ? `Critical location mismatch is ${verification.distanceMeters} meters and requires manager approval` : null,
+      sameAgentSiteDateVisit && !hasRevisitReason
+        ? `A site visit already exists for this agent/site on ${revisitDateKey}; manager review or revisit reason required`
+        : null,
+      duplicatePhoneMatches.length
+        ? `Stakeholder phone already exists elsewhere: ${duplicatePhoneMatches.slice(0, 3).join("; ")}`
+        : null,
+      nearbySameLeadSite
+        ? `New site under existing lead is near existing site ${
+            (nearbySameLeadSite as any).siteName ?? nearbySameLeadSite.id
+          }; manager approval required`
+        : null,
+      invalidStakeholderPhoneReasons.length
+        ? `Stakeholder phone validation issue: ${invalidStakeholderPhoneReasons.slice(0, 3).join("; ")}`
+        : null,
       duplicateMatch?.strength === "STRONG" ? `Strong duplicate candidate ${duplicateMatch.site.siteName}` : null,
+      duplicateMatch?.strength === "MODERATE" ? `Possible duplicate site near ${duplicateMatch.site.siteName}` : null,
+      photoReused ? "Possible reused site visit photo detected" : null,
       !hasMeaningfulStakeholder(stakeholders) ? "No meaningful stakeholder met" : null,
       foundNoOneRepeatCount >= 2 ? "Repeated Found No One entries for this site need manager review" : null,
+      gradeRequiresReview ? `Concrete grade ${normalizedConcreteGrade} needs manager review` : null,
+      quantityRequiresReview ? `Quantity ${input.quantityCum} cum is unusual and needs manager review` : null,
     ].filter((reason): reason is string => Boolean(reason));
     const followUpTaskId = resolvedNextFollowUpAt
       ? randomUUID()
       : null;
 
+    // TODO: Google Contacts sync status fields are not present in SiteVisit type. Actual sync should be added only after OAuth design.
     const visit: SiteVisit = {
       id: randomUUID(),
       sessionId: session.id,
@@ -3070,7 +3771,7 @@ export async function createSiteVisit(
       latLng: input.latLng,
       detectedLatLng,
       stakeholders,
-      concreteGrade: input.concreteGrade,
+      concreteGrade: normalizedConcreteGrade,
       quantityCum: input.quantityCum,
       stageOfWork: input.stageOfWork,
       futureScope: input.futureScope,
@@ -3100,9 +3801,15 @@ export async function createSiteVisit(
       duplicateMatchStrength: duplicateMatch?.strength ?? "NONE",
       duplicateMatchedSiteId: duplicateMatch?.site.id ?? null,
       duplicateOverrideReason: null,
-      productivityTag: managerReviewReasons.length ? "SUSPICIOUS" : "PRODUCTIVE",
+      productivityTag: photoReused || locationSeverity === "CRITICAL" || locationSeverity === "REVIEW"
+        ? "SUSPICIOUS"
+        : !hasMeaningfulStakeholder(stakeholders)
+          ? "LOW_QUALITY"
+          : resolvedNextFollowUpAt
+            ? "FOLLOW_UP_NEEDED"
+            : "PRODUCTIVE",
       arrivalPhotoHash,
-      isPhotoReused: database.siteVisits.some((entry) => entry.arrivalPhotoHash && entry.arrivalPhotoHash === arrivalPhotoHash),
+      isPhotoReused: photoReused,
       editHistory: [],
       contactPresenceStatus: hasMeaningfulStakeholder(stakeholders) ? "PRESENT" : "FOUND_NO_ONE",
       followUpTaskId,
@@ -3160,6 +3867,79 @@ export async function updateSiteVisit(
       throw new Error("You can only edit your own site visit reports.");
     }
 
+    const phoneEditFields = ["phone", "phoneNumber", "mobile", "stakeholderPhone", "contactPhone"];
+
+    const attemptedPhoneEditFields = phoneEditFields.filter((field) =>
+      Object.prototype.hasOwnProperty.call(input as any, field),
+    );
+
+    if (attemptedPhoneEditFields.length > 0) {
+      visit.editHistory ??= [];
+
+      visit.editHistory.push({
+        id: randomUUID(),
+        field: "REMARKS",
+        oldValue: "",
+        newValue: attemptedPhoneEditFields.join(", "),
+        editedBy: user.id,
+        editedAt: nowIso(),
+        reason: "Attempted stakeholder phone edit requires manager review and cannot be silently applied.",
+      });
+
+      visit.managerReviewRequired = true;
+      visit.managerReviewReason = [
+        visit.managerReviewReason,
+        `Stakeholder phone edit attempted for fields: ${attemptedPhoneEditFields.join(", ")}. Manager review required.`,
+      ]
+        .filter(Boolean)
+        .join("; ");
+    }
+
+    const lockedProofFields = [
+      "arrivalPhotoUrl",
+      "arrivalPhotoHash",
+      "arrivalPhotoName",
+      "photoCapturedAt",
+      "capturedAt",
+      "visitedAt",
+      "detectedLatLng",
+      "capturedLat",
+      "capturedLng",
+      "latitude",
+      "longitude",
+      "gpsVerificationStatus",
+      "locationVerificationStatus",
+      "managerReviewRequired",
+      "managerReviewReason",
+      "managerApprovalStatus",
+      "sessionId",
+      "agentId",
+      "createdBy",
+      "createdAt",
+    ];
+
+    const attemptedLockedProofEdits = lockedProofFields.filter((field) =>
+      Object.prototype.hasOwnProperty.call(input as any, field),
+    );
+
+    if (attemptedLockedProofEdits.length > 0) {
+      visit.editHistory ??= [];
+
+      visit.editHistory.push({
+        id: randomUUID(),
+        field: "REMARKS",
+        oldValue: "",
+        newValue: attemptedLockedProofEdits.join(", "),
+        editedBy: user.id,
+        editedAt: nowIso(),
+        reason: "Attempted edit of locked proof fields was blocked by backend.",
+      });
+
+      throw new Error(
+        `Critical proof fields cannot be edited after submission: ${attemptedLockedProofEdits.join(", ")}`,
+      );
+    }
+
     visit.editHistory ??= [];
     const appendVisitEdit = (field: "REMARKS" | "STAGE" | "FOLLOW_UP" | "GRADE" | "QUANTITY", oldValue: string, newValue: string) => {
       if (oldValue === newValue) {
@@ -3194,11 +3974,23 @@ export async function updateSiteVisit(
     }
 
     if (typeof input.concreteGrade === "string") {
-      const value = input.concreteGrade.trim().toUpperCase();
+      const value = normalizeConcreteGradeForVisit(input.concreteGrade);
       if (!value) {
         throw new Error("Concrete grade cannot be empty.");
       }
+
       appendVisitEdit("GRADE", visit.concreteGrade, value);
+
+      if (visit.concreteGrade !== value) {
+        visit.managerReviewRequired = true;
+        visit.managerReviewReason = [
+          visit.managerReviewReason,
+          `Concrete grade changed from ${visit.concreteGrade} to ${value}; manager review required`,
+        ]
+          .filter(Boolean)
+          .join("; ");
+      }
+
       visit.concreteGrade = value;
     }
 
@@ -3206,13 +3998,41 @@ export async function updateSiteVisit(
       if (!Number.isFinite(input.quantityCum) || input.quantityCum <= 0) {
         throw new Error("Quantity must be greater than zero.");
       }
+
       appendVisitEdit("QUANTITY", String(visit.quantityCum), String(input.quantityCum));
+
+      if (visit.quantityCum !== input.quantityCum) {
+        visit.managerReviewRequired = true;
+        visit.managerReviewReason = [
+          visit.managerReviewReason,
+          `Quantity changed from ${visit.quantityCum} cum to ${input.quantityCum} cum; manager review required`,
+          isUnusualSiteVisitQuantity(input.quantityCum) ? `Updated quantity ${input.quantityCum} cum is unusual` : null,
+        ]
+          .filter(Boolean)
+          .join("; ");
+      }
+
       visit.quantityCum = input.quantityCum;
     }
 
-    if (input.leadStage) {
-      appendVisitEdit("STAGE", visit.leadStage, input.leadStage);
-      visit.leadStage = input.leadStage;
+    if (input.leadStage && input.leadStage !== visit.leadStage) {
+      visit.editHistory?.push({
+        id: randomUUID(),
+        field: "STAGE",
+        oldValue: visit.leadStage,
+        newValue: input.leadStage,
+        editedBy: user.id,
+        editedAt: nowIso(),
+        reason: "Agent attempted to change lead stage. Backend ignored manual stage edit because lead stage is system-calculated.",
+      });
+
+      visit.managerReviewRequired = true;
+      visit.managerReviewReason = [
+        visit.managerReviewReason,
+        "Agent attempted to manually change lead stage; backend ignored manual stage edit",
+      ]
+        .filter(Boolean)
+        .join("; ");
     }
 
     if (typeof input.nextFollowUpAt === "string") {
@@ -3232,6 +4052,24 @@ export async function updateSiteVisit(
       const value = input.remarksText.trim();
       appendVisitEdit("REMARKS", visit.remarksText ?? "", value);
       visit.remarksText = value;
+    }
+
+    if (typeof (input as any).currentSupplier === "string") {
+      const value = normalizeCurrentSupplier((input as any).currentSupplier);
+
+      appendVisitEdit("REMARKS", visit.currentSupplier ?? "", value);
+
+      if ((visit.currentSupplier ?? "") !== value) {
+        visit.managerReviewRequired = true;
+        visit.managerReviewReason = [
+          visit.managerReviewReason,
+          `Current supplier changed from ${visit.currentSupplier ?? "N/A"} to ${value}; manager review required`,
+        ]
+          .filter(Boolean)
+          .join("; ");
+      }
+
+      visit.currentSupplier = value;
     }
 
     const now = nowIso();
@@ -3521,6 +4359,78 @@ function safeDeliveryError(error: unknown) {
   return message.slice(0, 700);
 }
 
+function isWhatsappDeliveryVerified(database: Database, phone: string) {
+  const phoneDigits = normalizePhoneDigitsForMatch(phone);
+  if (!phoneDigits) {
+    return false;
+  }
+
+  const verifiedStatuses = new Set(["VERIFIED", "WHATSAPP_CHECKED"]);
+  const masterVerified = database.stakeholderMasters.some(
+    (stakeholder) =>
+      normalizePhoneDigitsForMatch(stakeholder.phone) === phoneDigits &&
+      verifiedStatuses.has(stakeholder.phoneVerificationStatus),
+  );
+
+  if (masterVerified) {
+    return true;
+  }
+
+  const siteContactVerified = database.leadSites.some((site) =>
+    site.stakeholders.some(
+      (stakeholder) =>
+        normalizePhoneDigitsForMatch(stakeholder.phone) === phoneDigits &&
+        verifiedStatuses.has(stakeholder.phoneVerificationStatus ?? "UNVERIFIED"),
+    ),
+  );
+
+  if (siteContactVerified) {
+    return true;
+  }
+
+  return database.siteVisits.some((visit) =>
+    visit.stakeholders.some(
+      (stakeholder) =>
+        normalizePhoneDigitsForMatch(stakeholder.phone) === phoneDigits &&
+        verifiedStatuses.has(stakeholder.phoneVerificationStatus ?? "UNVERIFIED"),
+    ),
+  );
+}
+
+function markWhatsappNumberVerified(database: Database, phone: string, verifiedAt: string) {
+  const phoneDigits = normalizePhoneDigitsForMatch(phone);
+  if (!phoneDigits) {
+    return;
+  }
+
+  for (const stakeholder of database.stakeholderMasters ?? []) {
+    if (normalizePhoneDigitsForMatch(stakeholder.phone) !== phoneDigits) {
+      continue;
+    }
+
+    stakeholder.phoneVerificationStatus = "VERIFIED";
+    stakeholder.phoneVerifiedAt = verifiedAt;
+    stakeholder.lastWhatsappVerificationAt = verifiedAt;
+    stakeholder.lastVerificationError = null;
+    stakeholder.updatedAt = verifiedAt;
+    syncStakeholderContactVerification(database, stakeholder);
+  }
+}
+
+function buildInformalQuotationWhatsappMessage(request: InformalQuotationRequest, pdfUrl: string) {
+  return [
+    `Dear ${request.stakeholderName},`,
+    "",
+    "Your approved SPD Concrete informal quotation is ready.",
+    `Reference: ${request.quotationRef ?? request.id}`,
+    `Project: ${request.siteName}`,
+    `PDF: ${pdfUrl}`,
+    "",
+    "Regards,",
+    "SPD Concrete Pvt Ltd",
+  ].join("\n");
+}
+
 function requireSiteStakeholder(site: LeadSite, input: CreateInformalQuotationRequestInput) {
   const role = normalizeStakeholderRole(input.stakeholderRole);
   const name = input.stakeholderName.trim();
@@ -3796,6 +4706,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       .filter((template) => template.type === "QUOTATION" && template.status === "ACTIVE")
       .sort((left, right) => compareIsoAsc(right.uploadedAt, left.uploadedAt))[0] ?? null;
   let pdfBuffer: Buffer;
+  let quotationPdfUrl = "";
 
   try {
     if (!quotationTemplate) {
@@ -3810,6 +4721,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       mimeType: "application/pdf",
       directory: "quotations",
     });
+    quotationPdfUrl = storedPdf.fileUrl;
 
     await updateDatabase((nextDatabase) => {
       const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
@@ -3835,8 +4747,8 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.pdfError = errorMessage;
       nextRequest.emailStatus = "FAILED";
       nextRequest.emailError = `PDF generation failed: ${errorMessage}`;
-      nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
-      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
+      nextRequest.whatsappStatus = "FAILED";
+      nextRequest.whatsappError = `PDF generation failed: ${errorMessage}`;
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "PDF_FAILED", errorMessage);
       return nextRequest;
     });
@@ -3869,7 +4781,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       ],
     });
 
-    return updateDatabase((nextDatabase) => {
+    await updateDatabase((nextDatabase) => {
       const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
       if (!nextRequest) {
         throw new Error("Informal quotation request not found while saving email status.");
@@ -3879,8 +4791,6 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.emailError = null;
       nextRequest.emailTo = request.stakeholderEmail;
       nextRequest.emailCc = ccEmails;
-      nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
-      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
       nextRequest.deliveryChannels ??= [];
       nextRequest.deliveryChannels.push({ channel: "EMAIL", sentAt: nextRequest.emailSentAt, sentBy: manager.id });
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_SENT", `Sent quotation email to ${request.stakeholderEmail}.`);
@@ -3888,7 +4798,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
     });
   } catch (error) {
     const errorMessage = safeDeliveryError(error);
-    return updateDatabase((nextDatabase) => {
+    await updateDatabase((nextDatabase) => {
       const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
       if (!nextRequest) {
         throw new Error("Informal quotation request not found while saving email failure.");
@@ -3898,12 +4808,98 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.emailError = errorMessage;
       nextRequest.emailTo = request.stakeholderEmail;
       nextRequest.emailCc = ccEmails;
-      nextRequest.whatsappStatus = "PENDING_CONFIGURATION";
-      nextRequest.whatsappError = "WhatsApp sending is pending Evolution API configuration.";
       logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "EMAIL_FAILED", errorMessage);
       return nextRequest;
     });
   }
+
+  return deliverInformalQuotationWhatsapp(manager, request.id, quotationPdfUrl);
+}
+
+async function deliverInformalQuotationWhatsapp(manager: User, requestId: string, quotationPdfUrl: string) {
+  const database = await readDatabase();
+  const request = database.informalQuotationRequests.find((entry) => entry.id === requestId);
+
+  if (!request) {
+    throw new Error("Informal quotation request not found for WhatsApp delivery.");
+  }
+
+  if (!quotationPdfUrl) {
+    return updateDatabase((nextDatabase) => {
+      const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === requestId);
+      if (!nextRequest) {
+        throw new Error("Informal quotation request not found while saving WhatsApp failure.");
+      }
+
+      nextRequest.whatsappStatus = "FAILED";
+      nextRequest.whatsappSentAt = null;
+      nextRequest.whatsappError = "Quotation PDF link is missing.";
+      return nextRequest;
+    });
+  }
+
+  if (!isWhatsappDeliveryVerified(database, request.whatsappNumber)) {
+    return updateDatabase((nextDatabase) => {
+      const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === requestId);
+      if (!nextRequest) {
+        throw new Error("Informal quotation request not found while saving WhatsApp skip.");
+      }
+
+      nextRequest.whatsappStatus = "NOT_SENT";
+      nextRequest.whatsappSentAt = null;
+      nextRequest.whatsappError = "WhatsApp number is not verified. Send WhatsApp verification first, then approve or resend.";
+      logAudit(
+        nextDatabase,
+        manager,
+        "InformalQuotationRequest",
+        nextRequest.id,
+        "WHATSAPP_NOT_SENT",
+        nextRequest.whatsappError,
+      );
+      return nextRequest;
+    });
+  }
+
+  const result = await sendWhatsappVerification(
+    request.whatsappNumber,
+    buildInformalQuotationWhatsappMessage(request, quotationPdfUrl),
+  );
+
+  return updateDatabase((nextDatabase) => {
+    const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === requestId);
+    if (!nextRequest) {
+      throw new Error("Informal quotation request not found while saving WhatsApp status.");
+    }
+
+    const now = nowIso();
+    nextRequest.whatsappStatus =
+      result.status === "SENT"
+        ? "SENT"
+        : result.status === "PENDING_CONFIGURATION"
+          ? "PENDING_CONFIGURATION"
+          : "FAILED";
+    nextRequest.whatsappSentAt = result.status === "SENT" ? now : null;
+    nextRequest.whatsappError = result.error;
+
+    if (result.status === "SENT") {
+      nextRequest.deliveryChannels ??= [];
+      nextRequest.deliveryChannels.push({ channel: "WHATSAPP", sentAt: now, sentBy: manager.id });
+      markWhatsappNumberVerified(nextDatabase, nextRequest.whatsappNumber, now);
+    }
+
+    logAudit(
+      nextDatabase,
+      manager,
+      "InformalQuotationRequest",
+      nextRequest.id,
+      `WHATSAPP_${nextRequest.whatsappStatus}`,
+      result.status === "SENT"
+        ? `Sent quotation WhatsApp to ${nextRequest.whatsappNumber}.`
+        : (result.error ?? "WhatsApp quotation delivery failed."),
+    );
+
+    return nextRequest;
+  });
 }
 
 export interface CreateApprovalRequestInput {
@@ -3995,6 +4991,17 @@ export async function createApprovalRequest(
       database.informalQuotationRequests
         .filter((quotation) => quotation.status === "APPROVED" && quotation.siteId === site.id && quotation.isExpired !== true)
         .sort((left, right) => compareIsoAsc(right.decidedAt ?? right.createdAt, left.decidedAt ?? left.createdAt))[0] ?? null;
+
+    const duplicateOpenApproval = findOpenFinalApprovalForSite(database, site.id, items);
+
+    if (duplicateOpenApproval) {
+      throw new Error(
+        `A ${duplicateOpenApproval.status.toLowerCase()} final approval already exists for this site and grade. Use the existing approval or reject/close it before creating a new one.`,
+      );
+    }
+
+    const commercialVariationReasons = buildApprovalVariationReasons(items, latestQuotation, input);
+
     const quotationValidityStatus =
       !latestQuotation
         ? "NOT_LINKED"
@@ -4044,7 +5051,7 @@ export async function createApprovalRequest(
       directFinalApprovalReason: latestQuotation ? null : "No approved informal quotation linked; manager must review direct final approval.",
       routeFeasibilityStatus:
         input.oneWayDistanceKm > 40 ? "NOT_FEASIBLE" : input.oneWayDistanceKm > 25 || input.trafficCount > 4 ? "MARGINAL" : "FEASIBLE",
-      variationNotes: latestQuotation ? null : "Direct final approval without quotation.",
+      variationNotes: commercialVariationReasons.length ? commercialVariationReasons.join(" ") : null,
       minimumRatePerCum: minimumRatePerCum || null,
       rateValidationStatus: belowMinimum ? "BELOW_MINIMUM" : minimumRatePerCum > 0 ? "VALID" : "NOT_CHECKED",
       finalApprovalRecordId: null,
@@ -4075,9 +5082,147 @@ export async function createApprovalRequest(
       createdBy: user.id,
       createdAt: now,
     });
-    logAudit(database, user, "ApprovalRequest", approval.id, "CREATE", `Created final price approval request for ${createApprovalAuditSummary(approval)}.`);
+    logAudit(
+      database,
+      user,
+      "ApprovalRequest",
+      approval.id,
+      "CREATE",
+      `Created final price approval request for ${createApprovalAuditSummary(approval)}. ${
+        approval.variationNotes ? `Variation notes: ${approval.variationNotes}` : "No commercial variation detected."
+      }`,
+    );
     return approval;
   });
+}
+
+function normalizeSalesOrderPhone(value?: string | null) {
+  return `${value ?? ""}`.replace(/\D/g, "");
+}
+
+function validateReceiverPhoneForSalesOrder(value?: string | null) {
+  const phone = normalizeSalesOrderPhone(value);
+
+  if (!phone) {
+    return {
+      phone,
+      valid: false,
+      reason: "Receiver phone number is required for sales order delivery coordination.",
+    };
+  }
+
+  if (phone.length !== 10) {
+    return {
+      phone,
+      valid: false,
+      reason: `Receiver phone must be exactly 10 digits. Received ${phone.length} digits.`,
+    };
+  }
+
+  if (!/^[6-9]/.test(phone)) {
+    return {
+      phone,
+      valid: false,
+      reason: `Receiver phone ${phone} must start with 6, 7, 8, or 9.`,
+    };
+  }
+
+  if (/^(\d)\1{9}$/.test(phone) || ["1234567890", "0123456789", "9876543210"].includes(phone)) {
+    return {
+      phone,
+      valid: false,
+      reason: `Receiver phone ${phone} appears to be a dummy number.`,
+    };
+  }
+
+  return {
+    phone,
+    valid: true,
+    reason: null,
+  };
+}
+
+function getDateOnlyKey(value?: string | null) {
+  return toDateKey(value ?? nowIso());
+}
+
+function isPastDeliveryDate(value?: string | null) {
+  const deliveryDate = getDateOnlyKey(value);
+  const today = getDateOnlyKey(nowIso());
+  return deliveryDate < today;
+}
+
+function isTodayDeliveryDate(value?: string | null) {
+  return getDateOnlyKey(value) === getDateOnlyKey(nowIso());
+}
+
+function normalizeSalesOrderGrade(value: string) {
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function findOpenSalesOrderRequestForApproval(
+  database: Database,
+  approvalId: string,
+  grade: string,
+) {
+  const normalizedGrade = normalizeSalesOrderGrade(grade);
+
+  return database.salesOrderRequests.find((request) => {
+    if (request.approvalRequestId !== approvalId) {
+      return false;
+    }
+
+    const status = `${request.status ?? ""}`.toUpperCase();
+
+    if (["REJECTED", "CANCELLED", "CLOSED", "FULFILLED"].includes(status)) {
+      return false;
+    }
+
+    return normalizeSalesOrderGrade(`${request.grade ?? ""}`) === normalizedGrade;
+  });
+}
+
+function calculateApprovedQuantityForGrade(approval: ApprovalRequest, grade: string) {
+  const normalizedGrade = normalizeSalesOrderGrade(grade);
+  const matchingItems = approval.items.filter((item) => normalizeSalesOrderGrade(item.grade) === normalizedGrade);
+  const explicitItemQuantity = matchingItems.reduce(
+    (total, item) => total + Number((item as any).quantity ?? (item as any).quantityCum ?? 0),
+    0,
+  );
+
+  if (explicitItemQuantity > 0) {
+    return explicitItemQuantity;
+  }
+
+  if (matchingItems.length === 1 && (approval.items.length === 1 || normalizeSalesOrderGrade(approval.grade) === normalizedGrade)) {
+    return Number(approval.quantity ?? 0);
+  }
+
+  return 0;
+}
+
+function calculateExistingOpenQuantityForApproval(
+  database: Database,
+  approvalId: string,
+  grade: string,
+) {
+  const normalizedGrade = normalizeSalesOrderGrade(grade);
+
+  return database.salesOrderRequests
+    .filter((request) => {
+      if (request.approvalRequestId !== approvalId) {
+        return false;
+      }
+
+      const status = `${request.status ?? ""}`.toUpperCase();
+
+      if (["REJECTED", "CANCELLED", "CLOSED"].includes(status)) {
+        return false;
+      }
+
+      return normalizeSalesOrderGrade(`${request.grade ?? ""}`) === normalizedGrade;
+    })
+    .reduce((total, request) => total + Number((request as any).quantity ?? (request as any).quantityCum ?? 0), 0);
 }
 
 export async function createSalesOrderRequest(
@@ -4092,6 +5237,18 @@ export async function createSalesOrderRequest(
 
     if (!approval || approval.status !== "APPROVED") {
       throw new Error("Choose an approved final approval before creating the sales order request.");
+    }
+
+    const finalApprovalRecord = approval.finalApprovalRecordId
+      ? database.finalApprovals?.find((entry) => entry.id === approval.finalApprovalRecordId)
+      : null;
+
+    if (finalApprovalRecord && finalApprovalRecord.status !== "APPROVED") {
+      throw new Error("The linked final approval record is not approved.");
+    }
+
+    if (finalApprovalRecord && !finalApprovalRecord.lockedAt) {
+      throw new Error("The linked final approval is not locked. Manager must approve and lock it before sales order creation.");
     }
 
     if (approval.leadId !== lead.id) {
@@ -4118,24 +5275,54 @@ export async function createSalesOrderRequest(
       throw new Error("Select one approved grade before submitting the sales order request.");
     }
 
+    const requestedGrade = normalizeSalesOrderGrade(approvalItem.grade);
+    const receiverPhoneValidation = validateReceiverPhoneForSalesOrder(input.receiverPhone);
+
+    if (!receiverPhoneValidation.valid) {
+      throw new Error(receiverPhoneValidation.reason ?? "Receiver phone number is invalid.");
+    }
+
+    if (!input.requiredDate) {
+      throw new Error("Requested delivery date is required.");
+    }
+
+    if (isPastDeliveryDate(input.requiredDate)) {
+      throw new Error("Requested delivery date cannot be in the past.");
+    }
+
+    if (isTodayDeliveryDate(input.requiredDate) && !`${input.notes ?? ""}`.trim()) {
+      throw new Error("Urgent reason is required for same-day sales order request in notes.");
+    }
+
+    const approvedQuantityForGrade = calculateApprovedQuantityForGrade(approval, requestedGrade);
+
+    if (approvedQuantityForGrade <= 0) {
+      throw new Error(`Grade ${requestedGrade} is not available in the linked final approval.`);
+    }
+
     if (!Number.isFinite(quantity) || quantity <= 0) {
-      throw new Error("Enter a valid order quantity.");
+      throw new Error("Sales order quantity must be greater than zero.");
     }
 
-    if (Number.isNaN(requiredDate.getTime())) {
-      throw new Error("Choose a valid required date.");
+    const existingOpenQuantity = calculateExistingOpenQuantityForApproval(database, approval.id, requestedGrade);
+    const requestedQuantity = quantity;
+    const remainingApprovalQuantity = Math.round((approvedQuantityForGrade - existingOpenQuantity) * 100) / 100;
+
+    if (requestedQuantity > remainingApprovalQuantity) {
+      throw new Error(
+        `Requested quantity ${requestedQuantity} cum exceeds remaining approved quantity ${remainingApprovalQuantity} cum for grade ${requestedGrade}.`,
+      );
     }
 
-    const todayStart = new Date(toDateKey(nowIso()));
-    if (requiredDate < todayStart) {
-      throw new Error("Delivery date cannot be in the past. Choose a future date or request manager/accounting exception.");
+    const existingDuplicateRequest = findOpenSalesOrderRequestForApproval(database, approval.id, requestedGrade);
+
+    if (existingDuplicateRequest) {
+      throw new Error(
+        `An open sales order request already exists for this approval and grade. Existing request: ${(existingDuplicateRequest as any).sorNumber ?? existingDuplicateRequest.id}. Update the existing request instead of creating a duplicate.`,
+      );
     }
 
-    const receiverPhone = normalizeStakeholderPhone(input.receiverPhone, "OTHERS");
-
-    if (input.priority === "URGENT" && !input.notes.trim()) {
-      throw new Error("Urgent orders require a reason in notes.");
-    }
+    const receiverPhone = receiverPhoneValidation.phone;
 
     const paymentTerms = normalizePaymentTerms(approval.paymentType, approval.paymentTerms);
     if (requiresPaymentReceipt(approval.paymentType, paymentTerms) && !input.paymentReceivedConfirmed) {
@@ -4195,7 +5382,7 @@ export async function createSalesOrderRequest(
       plantId: lead.plantId ?? getUserPlantId(database, user.id),
       customerName: approval.customerName,
       siteName: site.siteName,
-      grade: approvalItem.grade,
+      grade: requestedGrade,
       approvedPrice: approvalItem.quotedPrice,
       quantity,
       remainingQuantity: quantity,
@@ -4316,19 +5503,31 @@ export async function createSalesOrderRequest(
       editHistory: [],
     };
 
+    const approvalPlantId = (approval as any).plantId ?? null;
+    const requestedPlantId = (input as any).plantId ?? approvalPlantId;
+    const plantChangedFromApproval = Boolean(approvalPlantId && requestedPlantId && approvalPlantId !== requestedPlantId);
+    const plantChangeReason = `${(input as any).plantChangeReason ?? ""}`.trim();
+
+    if (plantChangedFromApproval && !plantChangeReason) {
+      throw new Error("Plant change reason is required when sales order plant differs from final approval plant.");
+    }
+
     if (duplicateOpenRequest) {
       duplicateOpenRequest.childOrderIds ??= [];
       duplicateOpenRequest.childOrderIds.push(orderRequest.id);
     }
 
     database.salesOrderRequests.unshift(orderRequest);
+
     logAudit(
       database,
       user,
       "SalesOrderRequest",
       orderRequest.id,
       "CREATE",
-      `Created sales order request for ${orderRequest.customerName} (${orderRequest.grade}, ${orderRequest.quantity} CUM, amount ${orderRequest.amount}).`,
+      `Created sales order request ${(orderRequest as any).sorNumber ?? orderRequest.id} for grade ${requestedGrade}, quantity ${requestedQuantity} cum, delivery date ${input.requiredDate}. Remaining approved quantity after request: ${Math.max(remainingApprovalQuantity - requestedQuantity, 0)} cum.${
+        plantChangedFromApproval ? ` Plant changed from ${approvalPlantId} to ${requestedPlantId}. Reason: ${plantChangeReason}.` : ""
+      }`,
     );
     return orderRequest;
   });
@@ -5103,16 +6302,45 @@ export async function decideApprovalRequest(
       throw new Error("Approval request not found.");
     }
 
-    if (
-      status === "APPROVED" &&
-      (approval.rateValidationStatus === "BELOW_MINIMUM" || approval.routeFeasibilityStatus === "MARGINAL" || approval.routeFeasibilityStatus === "NOT_FEASIBLE") &&
-      !decisionNote.trim()
-    ) {
-      throw new Error("Manager note is required for below-minimum rate or route feasibility exceptions.");
+    if (approval.status !== "PENDING") {
+      throw new Error("This final approval request is already decided and locked.");
+    }
+
+    const managerDecisionNote = decisionNote.trim();
+
+    if (status === "APPROVED" && finalApprovalDecisionNeedsManagerNote(approval) && !managerDecisionNote) {
+      throw new Error(
+        "Manager note is required for final approval exceptions such as rate variation, route feasibility issue, direct approval without quotation, quotation mismatch, or commercial variation.",
+      );
+    }
+
+    if (status === "REJECTED" && !managerDecisionNote) {
+      throw new Error("Rejection reason is required for final approval.");
+    }
+
+    if (status === "APPROVED") {
+      const duplicateApprovedApproval = database.approvalRequests.find(
+        (entry) =>
+          entry.id !== approval.id &&
+          entry.siteId === approval.siteId &&
+          entry.status === "APPROVED" &&
+          entry.items.some((entryItem) =>
+            approval.items.some(
+              (approvalItem) =>
+                normalizeGradeKeyForApproval(entryItem.grade) === normalizeGradeKeyForApproval(approvalItem.grade),
+            ),
+          ),
+      );
+
+      if (duplicateApprovedApproval) {
+        throw new Error(
+          "Another approved final approval already exists for this site and grade. Reject or close the duplicate before approving this one.",
+        );
+      }
     }
 
     approval.status = status;
-    approval.decisionNote = decisionNote;
+    approval.decisionNote = managerDecisionNote || (status === "APPROVED" ? "Approved by manager." : "Rejected by manager.");
     approval.decidedAt = nowIso();
     approval.decidedBy = user.id;
     if (status === "APPROVED" && approval.rateValidationStatus === "BELOW_MINIMUM") {
@@ -5132,7 +6360,14 @@ export async function decideApprovalRequest(
         finalApproval.rejectionReason = decisionNote || "Rejected by manager.";
       }
     }
-    logAudit(database, user, "ApprovalRequest", approval.id, status, decisionNote || "Approval decision updated.");
+    logAudit(
+      database,
+      user,
+      "ApprovalRequest",
+      approval.id,
+      status,
+      approval.decisionNote || "Approval decision updated.",
+    );
     return approval;
   });
 }

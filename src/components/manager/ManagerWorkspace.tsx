@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Panel } from "@/components/Panel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { compareIsoAsc, toDateKey, toIndiaTimeLabel } from "@/lib/date";
+import { SiteVisitPhotoPreview } from "@/components/manager/SiteVisitPhotoPreview";
 import { MixDesignMaster } from "@/components/manager/MixDesignMaster";
 import {
   ApprovalDecisionCard,
@@ -85,6 +86,11 @@ type AgentTrackingCheckpoint = {
   label: string;
   detail: string;
   capturedAt: string;
+  photoUrl?: string | null;
+  siteName?: string | null;
+  managerReviewRequired?: boolean;
+  managerReviewReason?: string | null;
+  stakeholders?: any[];
 };
 
 type AgentTrackingLocation = {
@@ -245,6 +251,11 @@ function buildAgentTrackingSummary(
       label: "Site visit",
       detail: `${visit.siteName} (${visit.concreteGrade}, ${visit.quantityCum} cum).`,
       capturedAt: visit.visitedAt,
+      photoUrl: visit.arrivalPhotoUrl,
+      siteName: visit.siteName,
+      managerReviewRequired: visit.managerReviewRequired,
+      managerReviewReason: visit.managerReviewReason,
+      stakeholders: Array.isArray(visit.stakeholders) ? visit.stakeholders : [],
     });
 
     if (visit.latLng) {
@@ -1102,6 +1113,30 @@ function SalesAgentTrackingPanel({
                         <span className="metric-label">{toIndiaTimeLabel(checkpoint.capturedAt)}</span>
                       </div>
                       <p>{checkpoint.detail}</p>
+                      {checkpoint.label === "Site visit" && (
+                        <SiteVisitPhotoPreview photoUrl={checkpoint.photoUrl} siteName={checkpoint.siteName} />
+                      )}
+                      {checkpoint.managerReviewRequired && (
+                        <div className="warning-box mt-12">
+                          <strong>Manager review required</strong>
+                          <p>{checkpoint.managerReviewReason ?? "Review required for this site visit."}</p>
+                        </div>
+                      )}
+                      {Array.isArray(checkpoint.stakeholders) && checkpoint.stakeholders.length > 0 ? (
+                        <div className="note-box mt-12">
+                          <strong>Stakeholder phone verification</strong>
+                          <ul style={{ paddingLeft: "20px", marginTop: "8px" }}>
+                            {checkpoint.stakeholders.map((stakeholder: any, index: number) => (
+                              <li key={`${stakeholder.phone ?? stakeholder.phoneNumber ?? index}`}>
+                                Phone: {stakeholder.phone ?? stakeholder.phoneNumber ?? "N/A"} — Status:{" "}
+                                {stakeholder.phoneVerificationStatus ?? "NOT_CHECKED"} — WhatsApp:{" "}
+                                {stakeholder.whatsappCheckStatus ?? "NOT_CHECKED"} — Call:{" "}
+                                {stakeholder.callVerificationStatus ?? "NOT_STARTED"}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
                     </div>
                   ))
                 ) : (

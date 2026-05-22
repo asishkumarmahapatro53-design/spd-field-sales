@@ -29,7 +29,7 @@ describe("contact verification helpers", () => {
 
   it("builds distinct call and WhatsApp verification messages", () => {
     expect(buildVerificationMessage("CALL", "Amit", "Tower A")).toContain("verification call");
-    expect(buildVerificationMessage("WHATSAPP", "Amit", "Tower A")).toContain("Reply YES");
+    expect(buildVerificationMessage("WHATSAPP", "Amit", "Tower A")).toContain("confirms WhatsApp reachability");
   });
 
   it("recognizes WhatsApp confirmation replies", () => {

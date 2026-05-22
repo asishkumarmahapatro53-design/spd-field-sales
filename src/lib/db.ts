@@ -1158,10 +1158,13 @@ const COLLECTION_NAMES = [
   "finalApprovals",
 ] as const;
 
+const SINGLETON_DATABASE_KEYS = [] as const;
+
 // Compile-time safety: if a new Database collection is added but not listed above,
 // TypeScript fails the build so production never misses Firestore sync wiring.
 type CollectionNameCoverage = (typeof COLLECTION_NAMES)[number];
-type MissingCollectionNames = Exclude<keyof Database, CollectionNameCoverage>;
+type SingletonDatabaseKey = (typeof SINGLETON_DATABASE_KEYS)[number];
+type MissingCollectionNames = Exclude<keyof Database, CollectionNameCoverage | SingletonDatabaseKey>;
 type ExtraCollectionNames = Exclude<CollectionNameCoverage, keyof Database>;
 type EnsureNever<T extends never> = T;
 type _CollectionNamesMustCoverAllDatabaseKeys = EnsureNever<MissingCollectionNames>;
@@ -1191,6 +1194,10 @@ let firebaseUserBootstrapChecked = false;
 
 function getCollectionRef(firestore: FirebaseFirestore.Firestore, collectionName: DatabaseCollectionName) {
   return firestore.collection(getFirebaseRootPath()).doc("collections").collection(collectionName);
+}
+
+function getSingletonRef(firestore: FirebaseFirestore.Firestore, singletonName: SingletonDatabaseKey) {
+  return firestore.collection(getFirebaseRootPath()).doc("singletons").collection("values").doc(singletonName);
 }
 
 async function readFirebaseCollection<K extends DatabaseCollectionName>(
@@ -1400,6 +1407,20 @@ async function syncAllToFirebase(database: Database) {
     }
   }
 
+  for (const singletonName of SINGLETON_DATABASE_KEYS) {
+    const value = database[singletonName];
+    if (value !== undefined) {
+      batch.set(getSingletonRef(firestore, singletonName), sanitizeFirestoreValue(value));
+      opCount++;
+
+      if (opCount >= 490) {
+        await commitFirebaseBatch(batch, `sync ${singletonName}`);
+        batch = firestore.batch();
+        opCount = 0;
+      }
+    }
+  }
+
   if (opCount > 0) {
     await commitFirebaseBatch(batch, "sync final batch");
   }
@@ -1481,6 +1502,16 @@ async function ensureFirebaseCollections(): Promise<Database> {
       dbResult[collectionName] = items as any;
       if (items.length > 0) isEmpty = false;
     })
+  );
+
+  await Promise.all(
+    SINGLETON_DATABASE_KEYS.map(async (singletonName) => {
+      const snap = await getSingletonRef(firestore, singletonName).get();
+      if (snap.exists) {
+        (dbResult as any)[singletonName] = snap.data();
+        isEmpty = false;
+      }
+    }),
   );
 
   if (isEmpty) {
@@ -1597,6 +1628,11 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
         }
         originalMaps.set(collectionName, map);
       }
+      const originalSingletons = new Map<SingletonDatabaseKey, string | undefined>();
+      for (const singletonName of SINGLETON_DATABASE_KEYS) {
+        const value = database[singletonName];
+        originalSingletons.set(singletonName, value === undefined ? undefined : JSON.stringify(value));
+      }
 
       // Business/domain errors from updater must bubble up unchanged to the API caller.
       const result = await updater(database);
@@ -1642,6 +1678,27 @@ export async function updateDatabase<T>(updater: (database: Database) => Promise
               batch = firestore.batch(); // fresh batch after commit
               opCount = 0;
             }
+          }
+        }
+      }
+
+      for (const singletonName of SINGLETON_DATABASE_KEYS) {
+        const newValue = database[singletonName];
+        const newStr = newValue === undefined ? undefined : JSON.stringify(newValue);
+        const oldStr = originalSingletons.get(singletonName);
+
+        if (newStr !== oldStr) {
+          const ref = getSingletonRef(firestore, singletonName);
+          if (newValue === undefined) {
+            batch.delete(ref);
+          } else {
+            batch.set(ref, sanitizeFirestoreValue(newValue));
+          }
+          opCount++;
+          if (opCount >= 490) {
+            await commitFirebaseBatch(batch, `update ${singletonName}`);
+            batch = firestore.batch();
+            opCount = 0;
           }
         }
       }

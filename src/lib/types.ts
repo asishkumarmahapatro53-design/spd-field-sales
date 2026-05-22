@@ -1059,6 +1059,22 @@ export interface OdometerCorrectionEntry {
   linkedClaimId: string | null;
   dateKey?: string | null;
   status?: "PENDING_MANAGER_REOPEN" | "REOPENED" | "APPLIED" | "REJECTED";
+  // MOD-009 / MOD-012: Scoped reopen and correction audit
+  agentId?: string | null;
+  workdayDate?: string | null;
+  readingType?: ReadingType | null;
+
+  reopenScope?: "SINGLE_DATE_SINGLE_TYPE" | null;
+  reopenedBy?: string | null;
+  reopenedAt?: string | null;
+
+  oldStartReadingId?: string | null;
+  oldEndReadingId?: string | null;
+  oldStartValue?: number | null;
+  oldEndValue?: number | null;
+
+  selectedReadingId?: string | null;
+  newReadingId?: string | null;
 }
 
 // MOD-013: Agent daily travel summary (computed, not stored)
@@ -1156,6 +1172,10 @@ export interface SiteMapMarker {
   quantityCum: number;
   lastVisitedAt: string;
   missingLocation: boolean;
+  locationCorrectionRequired?: boolean;
+  locationCorrectionReason?: string | null;
+  directionsUsageCount?: number;
+  directionsLastUsedAt?: string | null;
 }
 
 export interface Database {
