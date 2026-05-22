@@ -176,6 +176,7 @@ async function saveToSupabaseStorage(
   return {
     photoUrl: `${config.projectUrl}/storage/v1/object/public/${config.bucket}/${objectPath}`,
     originalFileName: file.name || path.basename(bucketPath),
+    s3Key: null,
     localAbsolutePath: null,
   };
 }
@@ -188,6 +189,7 @@ async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, m
   return {
     photoUrl: buildS3ObjectUrl(bucketPath, bucket, region),
     originalFileName: file.name || path.basename(bucketPath),
+    s3Key: bucketPath,
     localAbsolutePath: null,
   };
 }
@@ -371,6 +373,7 @@ export async function saveUploadedFile(file: File, buffer?: Buffer) {
     return {
       photoUrl,
       originalFileName: file.name || fileName,
+      s3Key: null,
       localAbsolutePath: null,
     };
   }
@@ -387,8 +390,89 @@ export async function saveUploadedFile(file: File, buffer?: Buffer) {
   return {
     photoUrl: `/local-uploads/${relativeDir.replaceAll("\\", "/")}/${fileName}`,
     originalFileName: file.name || fileName,
+    s3Key: null,
     localAbsolutePath: absolutePath,
   };
+}
+
+function localUploadPathFromUrl(fileUrl: string) {
+  const prefix = "/local-uploads/";
+  if (!fileUrl.startsWith(prefix)) {
+    return null;
+  }
+
+  const relativePath = fileUrl
+    .slice(prefix.length)
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment))
+    .join(path.sep);
+
+  return path.join(storageRoot, relativePath);
+}
+
+function s3KeyFromPublicUrl(fileUrl: string) {
+  try {
+    const url = new URL(fileUrl);
+    const pathname = url.pathname.replace(/^\/+/, "");
+    const looksLikeS3 = url.hostname.includes(".s3.") || url.hostname.includes(".s3-");
+    const looksLikeAppStorageKey = pathname.startsWith("uploads/") || pathname.startsWith("generated/");
+    if (!looksLikeS3 && !looksLikeAppStorageKey) {
+      return null;
+    }
+
+    if (!pathname) {
+      return null;
+    }
+
+    return pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+  } catch {
+    return null;
+  }
+}
+
+export async function readStoredFileBuffer(input: {
+  fileUrl: string;
+  s3Key?: string | null;
+  localAbsolutePath?: string | null;
+  maxBytes?: number;
+}) {
+  const { readFile } = await import("node:fs/promises");
+
+  if (input.localAbsolutePath) {
+    return readFile(input.localAbsolutePath);
+  }
+
+  const localPath = localUploadPathFromUrl(input.fileUrl);
+  if (localPath) {
+    return readFile(localPath);
+  }
+
+  if (shouldUseS3Storage()) {
+    const key = input.s3Key || s3KeyFromPublicUrl(input.fileUrl);
+    if (key) {
+      const result = await readS3ObjectBuffer(key, { maxBytes: input.maxBytes });
+      return result.buffer;
+    }
+  }
+
+  if (/^https?:\/\//i.test(input.fileUrl)) {
+    const response = await fetch(input.fileUrl);
+    if (!response.ok) {
+      throw new Error(`Could not read stored file (${response.status}).`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (input.maxBytes && buffer.byteLength > input.maxBytes) {
+      throw new Error("The stored file is larger than allowed.");
+    }
+    return buffer;
+  }
+
+  throw new Error("Could not read stored file from configured storage.");
 }
 
 export async function saveGeneratedBuffer(input: {

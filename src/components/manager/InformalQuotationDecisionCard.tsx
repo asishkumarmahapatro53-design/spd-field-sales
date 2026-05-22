@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toIndiaTimeLabel } from "@/lib/date";
-import type { InformalQuotationRequest, User } from "@/lib/types";
+import type { DocumentTemplate, InformalQuotationRequest, User } from "@/lib/types";
 
 async function parseApiError(response: Response) {
   const payload = await response.json().catch(() => ({ error: "Request failed." }));
@@ -98,6 +98,10 @@ function QuotationDocument({
         <strong>WhatsApp {quotation.whatsappStatus}</strong>
       </p>
       {quotation.quotationPdfUrl ? <p>PDF stored at: {quotation.quotationPdfUrl}</p> : null}
+      {quotation.quotationDocumentUrl && quotation.quotationDocumentUrl !== quotation.quotationPdfUrl ? (
+        <p>Document stored at: {quotation.quotationDocumentUrl}</p>
+      ) : null}
+      {quotation.pdfError ? <p>PDF note: {quotation.pdfError}</p> : null}
       {quotation.emailError ? <p>Email error: {quotation.emailError}</p> : null}
       {quotation.whatsappError ? <p>WhatsApp note: {quotation.whatsappError}</p> : null}
     </article>
@@ -115,18 +119,56 @@ function DocumentField({ label, value }: { label: string; value: string }) {
 export function InformalQuotationDecisionCard({
   quotations,
   agents,
+  templates,
 }: {
   quotations: InformalQuotationRequest[];
   agents: User[];
+  templates: DocumentTemplate[];
 }) {
   const router = useRouter();
   const [isRefreshing, startTransition] = useTransition();
   const [busyId, setBusyId] = useState("");
+  const [templateBusy, setTemplateBusy] = useState(false);
   const [error, setError] = useState("");
+  const [templateMessage, setTemplateMessage] = useState("");
+  const [templateError, setTemplateError] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  const activeQuotationTemplate = useMemo(
+    () =>
+      [...templates]
+        .filter((template) => template.type === "QUOTATION" && template.status === "ACTIVE")
+        .sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt))[0] ?? null,
+    [templates],
+  );
   const pending = quotations.filter((quotation) => quotation.status === "PENDING");
   const decided = quotations.filter((quotation) => quotation.status !== "PENDING").slice(0, 3);
+
+  async function uploadQuotationTemplate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTemplateBusy(true);
+    setTemplateMessage("");
+    setTemplateError("");
+
+    const formData = new FormData(event.currentTarget);
+    formData.set("type", "QUOTATION");
+
+    const response = await fetch("/api/document-templates", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      setTemplateError(await parseApiError(response));
+      setTemplateBusy(false);
+      return;
+    }
+
+    event.currentTarget.reset();
+    setTemplateMessage("Quotation template uploaded and activated.");
+    setTemplateBusy(false);
+    startTransition(() => router.refresh());
+  }
 
   async function decide(id: string, status: "APPROVED" | "REJECTED" | "CORRECTION_REQUESTED") {
     setBusyId(id);
@@ -159,6 +201,53 @@ export function InformalQuotationDecisionCard({
         <span className="status-badge status-pending">{pending.length} pending</span>
       </div>
       {error ? <div className="error-box">{error}</div> : null}
+      {templateError ? <div className="error-box">{templateError}</div> : null}
+      {templateMessage ? <div className="success-box">{templateMessage}</div> : null}
+
+      <div className="note-box mt-16">
+        <div className="panel-header">
+          <div>
+            <h3>Quotation template</h3>
+            <p className="panel-copy">
+              Managers can activate the official informal quotation DOCX here. The app fills it, tries PDF release, and falls back to DOCX if PDF conversion is unavailable.
+            </p>
+          </div>
+          <span className={activeQuotationTemplate ? "status-badge status-confirmed" : "status-badge status-pending"}>
+            {activeQuotationTemplate ? "Active" : "Missing"}
+          </span>
+        </div>
+
+        {activeQuotationTemplate ? (
+          <p className="panel-copy">
+            Active: <strong>{activeQuotationTemplate.name}</strong> ({activeQuotationTemplate.originalFileName}) uploaded{" "}
+            {toIndiaTimeLabel(activeQuotationTemplate.uploadedAt)}.{" "}
+            <a href={activeQuotationTemplate.fileUrl} target="_blank" rel="noopener noreferrer">Open template</a>
+          </p>
+        ) : (
+          <div className="error-box">Upload and activate a quotation template before approving and releasing quotations.</div>
+        )}
+
+        <form className="form-grid mt-16" onSubmit={(event) => void uploadQuotationTemplate(event)}>
+          <div className="field">
+            <label htmlFor="managerQuotationTemplateName">Template name</label>
+            <input id="managerQuotationTemplateName" name="name" placeholder="SPD informal quotation template" />
+          </div>
+          <div className="field">
+            <label htmlFor="managerQuotationTemplateFile">Template file</label>
+            <input
+              id="managerQuotationTemplateFile"
+              name="file"
+              type="file"
+              accept=".docx,.pdf,.jpg,.jpeg,.png,.webp"
+              required
+            />
+            <span className="hint">Use the SPD informal quotation DOCX for data-filled quotation release.</span>
+          </div>
+          <button className="button" type="submit" disabled={templateBusy || isRefreshing}>
+            {templateBusy ? "Uploading..." : "Upload quotation template"}
+          </button>
+        </form>
+      </div>
 
       <div className="data-list">
         {pending.length ? (

@@ -675,10 +675,14 @@ function DocumentTemplatePanel({ templates }: { templates: DocumentTemplate[] })
                     id={`${entry.type}-template-file`}
                     name="file"
                     type="file"
-                    accept=".pdf,.jpg,.jpeg,.png,.webp"
+                    accept={entry.type === "QUOTATION" ? ".docx,.pdf,.jpg,.jpeg,.png,.webp" : ".pdf,.jpg,.jpeg,.png,.webp"}
                     required
                   />
-                  <span className="hint">Use image files for print-page background templates. PDFs are stored as controlled official template references.</span>
+                  <span className="hint">
+                    {entry.type === "QUOTATION"
+                      ? "Use the official quotation DOCX for data-filled release, or PDF/image files as references."
+                      : "Use image files for print-page background templates. PDFs are stored as controlled official template references."}
+                  </span>
                 </div>
                 <button className="button" type="submit" disabled={busyType === entry.type}>
                   {busyType === entry.type ? "Uploading..." : `Upload ${entry.label.toLowerCase()} template`}

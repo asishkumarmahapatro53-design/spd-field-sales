@@ -492,6 +492,10 @@ export interface InformalQuotationRequest {
   quotationRef: string | null;
   quotationPdfUrl: string | null;
   quotationPdfS3Key: string | null;
+  quotationDocumentUrl?: string | null;
+  quotationDocumentS3Key?: string | null;
+  quotationDocumentMimeType?: string | null;
+  quotationDocumentFileName?: string | null;
   pdfStatus: InformalQuotationPdfStatus;
   pdfGeneratedAt: string | null;
   pdfError: string | null;
@@ -636,6 +640,8 @@ export interface DocumentTemplate {
   type: DocumentTemplateType;
   name: string;
   fileUrl: string;
+  fileS3Key?: string | null;
+  localAbsolutePath?: string | null;
   fileMimeType: string;
   originalFileName: string;
   status: DocumentTemplateStatus;

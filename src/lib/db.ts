@@ -549,6 +549,10 @@ function normalizeDatabase(rawDatabase: Database) {
   });
   database.customerInvoices ??= createCustomerInvoiceSeeds(database.customerAccounts.map((entry) => entry.id));
   database.documentTemplates ??= [];
+  database.documentTemplates.forEach((template) => {
+    template.fileS3Key ??= null;
+    template.localAbsolutePath ??= null;
+  });
   database.users ??= [];
   if (!database.users.some((entry) => entry.employeeId === "MD5001")) {
     database.users.push(createMixDesignUserSeed());
@@ -830,6 +834,10 @@ function normalizeDatabase(rawDatabase: Database) {
     request.quotationRef ??= null;
     request.quotationPdfUrl ??= null;
     request.quotationPdfS3Key ??= null;
+    request.quotationDocumentUrl ??= request.quotationPdfUrl ?? null;
+    request.quotationDocumentS3Key ??= request.quotationPdfS3Key ?? null;
+    request.quotationDocumentMimeType ??= request.quotationPdfUrl ? "application/pdf" : null;
+    request.quotationDocumentFileName ??= null;
     request.pdfStatus ??= request.quotationPdfUrl ? "GENERATED" : "NOT_GENERATED";
     request.pdfGeneratedAt ??= null;
     request.pdfError ??= null;

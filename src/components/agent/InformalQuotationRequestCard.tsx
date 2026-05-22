@@ -510,6 +510,7 @@ export function InformalQuotationRequestCard({
                 <span>{formatPriceType(quotation.priceType)}</span>
                 <span>{formatPaymentType(quotation.paymentType, quotation.creditDays)}</span>
                 <span>PDF {quotation.pdfStatus.toLowerCase().replaceAll("_", " ")}</span>
+                {quotation.quotationDocumentMimeType?.includes("wordprocessingml") ? <span>DOCX fallback ready</span> : null}
                 <span>Email {quotation.emailStatus.toLowerCase()}</span>
                 <span>WhatsApp {quotation.whatsappStatus.toLowerCase().replaceAll("_", " ")}</span>
                 <span>{toIndiaTimeLabel(quotation.createdAt)}</span>

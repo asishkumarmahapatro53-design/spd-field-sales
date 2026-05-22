@@ -58,7 +58,11 @@ export default async function ManagerApprovalsPage() {
       </section>
 
       <section className="mt-24">
-        <InformalQuotationDecisionCard quotations={data.informalQuotationRequests} agents={data.agents} />
+        <InformalQuotationDecisionCard
+          quotations={data.informalQuotationRequests}
+          agents={data.agents}
+          templates={data.documentTemplates}
+        />
       </section>
 
       <section className="mt-24">

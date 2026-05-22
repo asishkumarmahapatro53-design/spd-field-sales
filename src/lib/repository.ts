@@ -32,6 +32,13 @@ import { compareIsoAsc, nowIso, toDateKey, toMonthKey } from "@/lib/date";
 import { buildVerificationMessage, placeCallVerification, sendWhatsappVerification } from "@/lib/contact-verification";
 import { readCollection, readCollectionByFieldValues, readDatabase, updateDatabase } from "@/lib/db";
 import { sendGmail } from "@/lib/gmail-smtp";
+import {
+  convertInformalQuotationDocxToPdf,
+  generateInformalQuotationDocx,
+  getInformalQuotationDocxFileName,
+  getInformalQuotationDocxMimeType,
+  isDocxTemplate,
+} from "@/lib/informal-quotation-docx";
 import { generateInformalQuotationPdf } from "@/lib/informal-quotation-pdf";
 import { extractPanFromGstin, isValidGstin, normalizeCastingType, normalizeGstin } from "@/lib/legal-workflow";
 import { findMixDesignForOrder, getDefaultMixDesignRecipe, parseSlumpMm } from "@/lib/mix-design";
@@ -44,7 +51,7 @@ import {
 } from "@/lib/odoo";
 import { ocrService } from "@/lib/ocr";
 import { distanceMeters, getLocationVerification, getStakeholderLabel, normalizeStakeholderRole, suggestLeadScore, suggestLeadStage, suggestNextFollowUp } from "@/lib/site-visit";
-import { saveGeneratedBuffer } from "@/lib/storage";
+import { readStoredFileBuffer, saveGeneratedBuffer } from "@/lib/storage";
 import type {
   AccountingDashboardData,
   AgentDashboardData,
@@ -53,6 +60,7 @@ import type {
   AuditLogEntry,
   BatcherDashboardData,
   Database,
+  DocumentTemplate,
   DocumentTemplateType,
   ContactVerificationEvent,
   ContactVerificationChannel,
@@ -79,6 +87,7 @@ import type {
   OdometerDaySummary,
   OdometerDiscardReason,
   OdometerLockStatus,
+  Plant,
   PaymentTerms,
   PaymentType,
   PaymentVerificationMode,
@@ -4354,9 +4363,105 @@ function getInformalQuotationPdfFileName(request: InformalQuotationRequest) {
   return `quotation-${ref.replace(/[^a-zA-Z0-9-]/g, "-")}.pdf`;
 }
 
+interface GeneratedInformalQuotationDocument {
+  buffer: Buffer;
+  fileName: string;
+  mimeType: string;
+  fileUrl: string;
+  s3Key: string | null;
+  isPdf: boolean;
+  pdfError: string | null;
+}
+
 function safeDeliveryError(error: unknown) {
   const message = error instanceof Error ? error.message : "Delivery failed.";
   return message.slice(0, 700);
+}
+
+function getInformalQuotationDeliveryLabel(document: GeneratedInformalQuotationDocument) {
+  return document.isPdf ? "PDF" : "DOCX";
+}
+
+async function generateAndStoreInformalQuotationDocument(input: {
+  quotation: InformalQuotationRequest;
+  plant: Plant | null;
+  manager: User | null;
+  salesAgent: User | null;
+  template: DocumentTemplate;
+}): Promise<GeneratedInformalQuotationDocument> {
+  const { quotation, plant, manager, salesAgent, template } = input;
+
+  if (isDocxTemplate(template.fileMimeType, template.originalFileName)) {
+    const templateBuffer = await readStoredFileBuffer({
+      fileUrl: template.fileUrl,
+      s3Key: template.fileS3Key,
+      localAbsolutePath: template.localAbsolutePath,
+      maxBytes: 8 * 1024 * 1024,
+    });
+    const docxBuffer = generateInformalQuotationDocx({
+      quotation,
+      plant,
+      manager,
+      salesAgent,
+      templateBuffer,
+    });
+    const docxFileName = getInformalQuotationDocxFileName(quotation);
+
+    try {
+      const convertedPdfBuffer = await convertInformalQuotationDocxToPdf(docxBuffer, docxFileName);
+      const storedPdf = await saveGeneratedBuffer({
+        buffer: convertedPdfBuffer,
+        fileName: getInformalQuotationPdfFileName(quotation),
+        mimeType: "application/pdf",
+        directory: "quotations",
+      });
+
+      return {
+        buffer: convertedPdfBuffer,
+        fileName: getInformalQuotationPdfFileName(quotation),
+        mimeType: "application/pdf",
+        fileUrl: storedPdf.fileUrl,
+        s3Key: storedPdf.s3Key,
+        isPdf: true,
+        pdfError: null,
+      };
+    } catch (error) {
+      const storedDocx = await saveGeneratedBuffer({
+        buffer: docxBuffer,
+        fileName: docxFileName,
+        mimeType: getInformalQuotationDocxMimeType(),
+        directory: "quotations",
+      });
+
+      return {
+        buffer: docxBuffer,
+        fileName: docxFileName,
+        mimeType: getInformalQuotationDocxMimeType(),
+        fileUrl: storedDocx.fileUrl,
+        s3Key: storedDocx.s3Key,
+        isPdf: false,
+        pdfError: safeDeliveryError(error),
+      };
+    }
+  }
+
+  const pdfBuffer = generateInformalQuotationPdf({ quotation, plant, manager, salesAgent, template });
+  const storedPdf = await saveGeneratedBuffer({
+    buffer: pdfBuffer,
+    fileName: getInformalQuotationPdfFileName(quotation),
+    mimeType: "application/pdf",
+    directory: "quotations",
+  });
+
+  return {
+    buffer: pdfBuffer,
+    fileName: getInformalQuotationPdfFileName(quotation),
+    mimeType: "application/pdf",
+    fileUrl: storedPdf.fileUrl,
+    s3Key: storedPdf.s3Key,
+    isPdf: true,
+    pdfError: null,
+  };
 }
 
 function isWhatsappDeliveryVerified(database: Database, phone: string) {
@@ -4417,14 +4522,14 @@ function markWhatsappNumberVerified(database: Database, phone: string, verifiedA
   }
 }
 
-function buildInformalQuotationWhatsappMessage(request: InformalQuotationRequest, pdfUrl: string) {
+function buildInformalQuotationWhatsappMessage(request: InformalQuotationRequest, documentUrl: string, isPdf: boolean) {
   return [
     `Dear ${request.stakeholderName},`,
     "",
     "Your approved SPD Concrete informal quotation is ready.",
     `Reference: ${request.quotationRef ?? request.id}`,
     `Project: ${request.siteName}`,
-    `PDF: ${pdfUrl}`,
+    `${isPdf ? "PDF" : "Document"}: ${documentUrl}`,
     "",
     "Regards,",
     "SPD Concrete Pvt Ltd",
@@ -4559,6 +4664,10 @@ export async function createInformalQuotationRequest(user: User, input: CreateIn
       quotationRef: null,
       quotationPdfUrl: null,
       quotationPdfS3Key: null,
+      quotationDocumentUrl: null,
+      quotationDocumentS3Key: null,
+      quotationDocumentMimeType: null,
+      quotationDocumentFileName: null,
       pdfStatus: "NOT_GENERATED",
       pdfGeneratedAt: null,
       pdfError: null,
@@ -4705,35 +4814,45 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
     (database.documentTemplates ?? [])
       .filter((template) => template.type === "QUOTATION" && template.status === "ACTIVE")
       .sort((left, right) => compareIsoAsc(right.uploadedAt, left.uploadedAt))[0] ?? null;
-  let pdfBuffer: Buffer;
-  let quotationPdfUrl = "";
+  let generatedDocument: GeneratedInformalQuotationDocument;
 
   try {
     if (!quotationTemplate) {
       throw new Error("Upload and activate a quotation template before approving and releasing quotations.");
     }
 
-    pdfBuffer = generateInformalQuotationPdf({ quotation: request, plant, manager: managerUser, salesAgent, template: quotationTemplate });
-    const fileName = getInformalQuotationPdfFileName(request);
-    const storedPdf = await saveGeneratedBuffer({
-      buffer: pdfBuffer,
-      fileName,
-      mimeType: "application/pdf",
-      directory: "quotations",
+    generatedDocument = await generateAndStoreInformalQuotationDocument({
+      quotation: request,
+      plant,
+      manager: managerUser,
+      salesAgent,
+      template: quotationTemplate,
     });
-    quotationPdfUrl = storedPdf.fileUrl;
 
     await updateDatabase((nextDatabase) => {
       const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === request.id);
       if (!nextRequest) {
-        throw new Error("Informal quotation request not found while saving PDF status.");
+        throw new Error("Informal quotation request not found while saving document status.");
       }
-      nextRequest.quotationPdfUrl = storedPdf.fileUrl;
-      nextRequest.quotationPdfS3Key = storedPdf.s3Key;
-      nextRequest.pdfStatus = "GENERATED";
+      nextRequest.quotationDocumentUrl = generatedDocument.fileUrl;
+      nextRequest.quotationDocumentS3Key = generatedDocument.s3Key;
+      nextRequest.quotationDocumentMimeType = generatedDocument.mimeType;
+      nextRequest.quotationDocumentFileName = generatedDocument.fileName;
+      nextRequest.quotationPdfUrl = generatedDocument.isPdf ? generatedDocument.fileUrl : null;
+      nextRequest.quotationPdfS3Key = generatedDocument.isPdf ? generatedDocument.s3Key : null;
+      nextRequest.pdfStatus = generatedDocument.isPdf ? "GENERATED" : "FAILED";
       nextRequest.pdfGeneratedAt = nowIso();
-      nextRequest.pdfError = null;
-      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "PDF_GENERATED", `Generated quotation PDF ${nextRequest.quotationRef}.`);
+      nextRequest.pdfError = generatedDocument.pdfError;
+      logAudit(
+        nextDatabase,
+        manager,
+        "InformalQuotationRequest",
+        nextRequest.id,
+        generatedDocument.isPdf ? "PDF_GENERATED" : "DOCX_FALLBACK_GENERATED",
+        generatedDocument.isPdf
+          ? `Generated quotation PDF ${nextRequest.quotationRef}.`
+          : `Generated quotation DOCX fallback ${nextRequest.quotationRef}. PDF conversion failed: ${generatedDocument.pdfError ?? "unknown error"}`,
+      );
       return nextRequest;
     });
   } catch (error) {
@@ -4746,10 +4865,10 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       nextRequest.pdfStatus = "FAILED";
       nextRequest.pdfError = errorMessage;
       nextRequest.emailStatus = "FAILED";
-      nextRequest.emailError = `PDF generation failed: ${errorMessage}`;
+      nextRequest.emailError = `Quotation document generation failed: ${errorMessage}`;
       nextRequest.whatsappStatus = "FAILED";
-      nextRequest.whatsappError = `PDF generation failed: ${errorMessage}`;
-      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "PDF_FAILED", errorMessage);
+      nextRequest.whatsappError = `Quotation document generation failed: ${errorMessage}`;
+      logAudit(nextDatabase, manager, "InformalQuotationRequest", nextRequest.id, "DOCUMENT_FAILED", errorMessage);
       return nextRequest;
     });
   }
@@ -4764,7 +4883,7 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       text: [
         `Dear ${request.stakeholderName},`,
         "",
-        "Please find attached the approved SPD Concrete quotation.",
+        `Please find attached the approved SPD Concrete quotation ${getInformalQuotationDeliveryLabel(generatedDocument).toLowerCase()}.`,
         "",
         `Reference: ${request.quotationRef}`,
         `Project: ${request.siteName}`,
@@ -4774,9 +4893,9 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
       ].join("\n"),
       attachments: [
         {
-          filename: getInformalQuotationPdfFileName(request),
-          contentType: "application/pdf",
-          content: pdfBuffer,
+          filename: generatedDocument.fileName,
+          contentType: generatedDocument.mimeType,
+          content: generatedDocument.buffer,
         },
       ],
     });
@@ -4813,10 +4932,15 @@ async function deliverApprovedInformalQuotation(manager: User, requestId: string
     });
   }
 
-  return deliverInformalQuotationWhatsapp(manager, request.id, quotationPdfUrl);
+  return deliverInformalQuotationWhatsapp(manager, request.id, generatedDocument.fileUrl, generatedDocument.isPdf);
 }
 
-async function deliverInformalQuotationWhatsapp(manager: User, requestId: string, quotationPdfUrl: string) {
+async function deliverInformalQuotationWhatsapp(
+  manager: User,
+  requestId: string,
+  quotationDocumentUrl: string,
+  isPdf: boolean,
+) {
   const database = await readDatabase();
   const request = database.informalQuotationRequests.find((entry) => entry.id === requestId);
 
@@ -4824,7 +4948,7 @@ async function deliverInformalQuotationWhatsapp(manager: User, requestId: string
     throw new Error("Informal quotation request not found for WhatsApp delivery.");
   }
 
-  if (!quotationPdfUrl) {
+  if (!quotationDocumentUrl) {
     return updateDatabase((nextDatabase) => {
       const nextRequest = nextDatabase.informalQuotationRequests.find((entry) => entry.id === requestId);
       if (!nextRequest) {
@@ -4833,7 +4957,7 @@ async function deliverInformalQuotationWhatsapp(manager: User, requestId: string
 
       nextRequest.whatsappStatus = "FAILED";
       nextRequest.whatsappSentAt = null;
-      nextRequest.whatsappError = "Quotation PDF link is missing.";
+      nextRequest.whatsappError = "Quotation document link is missing.";
       return nextRequest;
     });
   }
@@ -4862,7 +4986,7 @@ async function deliverInformalQuotationWhatsapp(manager: User, requestId: string
 
   const result = await sendWhatsappVerification(
     request.whatsappNumber,
-    buildInformalQuotationWhatsappMessage(request, quotationPdfUrl),
+    buildInformalQuotationWhatsappMessage(request, quotationDocumentUrl, isPdf),
   );
 
   return updateDatabase((nextDatabase) => {
@@ -6699,6 +6823,7 @@ async function getManagerScopedDashboardDatabase() {
     priceBenchmarks,
     customerAccounts,
     customerInvoices,
+    documentTemplates,
   ] = await Promise.all([
     readCollection("users"),
     readCollection("plants"),
@@ -6718,6 +6843,7 @@ async function getManagerScopedDashboardDatabase() {
     readCollection("priceBenchmarks"),
     readCollection("customerAccounts", { limit }),
     readCollection("customerInvoices", { limit }),
+    readCollection("documentTemplates", { limit: 40 }),
   ]);
 
   return createDashboardDatabaseSlice({
@@ -6739,6 +6865,7 @@ async function getManagerScopedDashboardDatabase() {
     priceBenchmarks,
     customerAccounts,
     customerInvoices,
+    documentTemplates,
   });
 }
 

@@ -13,7 +13,9 @@ const ALLOWED_TEMPLATE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
+const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const MAX_TEMPLATE_BYTES = 8 * 1024 * 1024;
 
 export async function POST(request: Request) {
@@ -40,9 +42,15 @@ export async function POST(request: Request) {
       throw new ApiError(413, "Template file is too large. Maximum size is 8 MB.");
     }
 
-    const mimeType = file.type || "application/octet-stream";
-    if (!ALLOWED_TEMPLATE_MIME_TYPES.has(mimeType)) {
-      throw new ApiError(400, "Only PDF, JPG, PNG, or WebP templates are supported.");
+    const extension = file.name.toLowerCase().split(".").pop() ?? "";
+    const mimeType = extension === "docx" ? DOCX_MIME_TYPE : file.type || "application/octet-stream";
+    const isAllowedDocx = type === "QUOTATION" && extension === "docx";
+    if (!ALLOWED_TEMPLATE_MIME_TYPES.has(mimeType) && !isAllowedDocx) {
+      throw new ApiError(400, "Only PDF, JPG, PNG, WebP, or quotation DOCX templates are supported.");
+    }
+
+    if (extension === "docx" && type !== "QUOTATION") {
+      throw new ApiError(400, "DOCX templates are currently supported for quotations only.");
     }
 
     const storedFile = await saveUploadedFile(file);
@@ -52,6 +60,8 @@ export async function POST(request: Request) {
       type,
       name: name || defaultTemplateName(type),
       fileUrl: storedFile.photoUrl,
+      fileS3Key: storedFile.s3Key,
+      localAbsolutePath: storedFile.localAbsolutePath,
       fileMimeType: mimeType,
       originalFileName: storedFile.originalFileName,
       status: "ACTIVE",
