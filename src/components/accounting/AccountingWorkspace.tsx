@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AccountingSalesOrderVerification } from "@/components/accounting/AccountingSalesOrderVerification";
 import { CommissionVoucherPanel } from "@/components/accounting/CommissionVoucherPanel";
+import { uploadDocumentTemplate } from "@/components/document-template-upload";
 import { getSalesOrderStatusMeta, normalizePaymentTerms } from "@/lib/commercial";
 import { customerLedgerKey, findCustomerAccountByName, getLedgerCustomerNames, isLedgerReadySalesOrder } from "@/lib/customer-ledger";
 import { toIndiaTimeLabel } from "@/lib/date";
@@ -602,24 +603,16 @@ function DocumentTemplatePanel({ templates }: { templates: DocumentTemplate[] })
     setError("");
     setBusyType(type);
 
-    const formData = new FormData(event.currentTarget);
-    formData.set("type", type);
-
-    const response = await fetch("/api/document-templates", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      setError(await parseApiError(response));
+    try {
+      await uploadDocumentTemplate({ form: event.currentTarget, type });
+      event.currentTarget.reset();
+      setMessage(`${type.toLowerCase().replaceAll("_", " ")} template uploaded and activated.`);
+      startTransition(() => router.refresh());
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Template upload failed.");
+    } finally {
       setBusyType(null);
-      return;
     }
-
-    event.currentTarget.reset();
-    setMessage(`${type.toLowerCase().replaceAll("_", " ")} template uploaded and activated.`);
-    setBusyType(null);
-    startTransition(() => router.refresh());
   }
 
   return (

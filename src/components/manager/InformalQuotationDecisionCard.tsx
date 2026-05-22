@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { uploadDocumentTemplate } from "@/components/document-template-upload";
 import { toIndiaTimeLabel } from "@/lib/date";
 import type { DocumentTemplate, InformalQuotationRequest, User } from "@/lib/types";
 
@@ -150,24 +151,16 @@ export function InformalQuotationDecisionCard({
     setTemplateMessage("");
     setTemplateError("");
 
-    const formData = new FormData(event.currentTarget);
-    formData.set("type", "QUOTATION");
-
-    const response = await fetch("/api/document-templates", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      setTemplateError(await parseApiError(response));
+    try {
+      await uploadDocumentTemplate({ form: event.currentTarget, type: "QUOTATION" });
+      event.currentTarget.reset();
+      setTemplateMessage("Quotation template uploaded and activated.");
+      startTransition(() => router.refresh());
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : "Template upload failed.");
+    } finally {
       setTemplateBusy(false);
-      return;
     }
-
-    event.currentTarget.reset();
-    setTemplateMessage("Quotation template uploaded and activated.");
-    setTemplateBusy(false);
-    startTransition(() => router.refresh());
   }
 
   async function decide(id: string, status: "APPROVED" | "REJECTED" | "CORRECTION_REQUESTED") {

@@ -6,6 +6,37 @@ import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from 
 
 const defaultStorageRoot = process.env.NODE_ENV === "production" ? "/tmp/runtime-uploads" : "./runtime-uploads";
 const storageRoot = path.resolve(process.cwd(), process.env.STORAGE_ROOT?.trim() || defaultStorageRoot);
+const DEFAULT_STORAGE_TIMEOUT_MS = 25_000;
+
+function getStorageTimeoutMs() {
+  const configured = Number(process.env.STORAGE_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured >= 5_000) {
+    return configured;
+  }
+
+  return DEFAULT_STORAGE_TIMEOUT_MS;
+}
+
+async function withStorageTimeout<T>(promise: Promise<T>, label: string) {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${Math.round(getStorageTimeoutMs() / 1000)} seconds.`));
+    }, getStorageTimeoutMs());
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
+}
 
 function allowsEphemeralPersistence() {
   return process.env.ALLOW_EPHEMERAL_PERSISTENCE?.trim().toLowerCase() === "true";
@@ -156,17 +187,31 @@ async function saveToSupabaseStorage(
   }
 
   const objectPath = buildSupabaseObjectPath(bucketPath);
-  const response = await fetch(`${config.projectUrl}/storage/v1/object/${config.bucket}/${objectPath}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-      "Content-Type": mimeType,
-      "x-upsert": "false",
-      "cache-control": "3600",
-    },
-    body: new Uint8Array(buffer),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getStorageTimeoutMs());
+  let response: Response;
+
+  try {
+    response = await fetch(`${config.projectUrl}/storage/v1/object/${config.bucket}/${objectPath}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+        "Content-Type": mimeType,
+        "x-upsert": "false",
+        "cache-control": "3600",
+      },
+      body: new Uint8Array(buffer),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`Supabase Storage upload timed out after ${Math.round(getStorageTimeoutMs() / 1000)} seconds.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const message = await response.text();
@@ -183,8 +228,19 @@ async function saveToSupabaseStorage(
 
 async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, mimeType: string) {
   const { bucket, region, client } = getS3Config();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), getStorageTimeoutMs());
 
-  await putS3Object(client, bucket, bucketPath, buffer, mimeType);
+  try {
+    await putS3Object(client, bucket, bucketPath, buffer, mimeType, controller.signal);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`S3 upload timed out after ${Math.round(getStorageTimeoutMs() / 1000)} seconds.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   return {
     photoUrl: buildS3ObjectUrl(bucketPath, bucket, region),
@@ -194,7 +250,14 @@ async function saveToS3Storage(file: File, buffer: Buffer, bucketPath: string, m
   };
 }
 
-async function putS3Object(client: S3Client, bucket: string, key: string, buffer: Buffer, mimeType: string) {
+async function putS3Object(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  buffer: Buffer,
+  mimeType: string,
+  abortSignal?: AbortSignal,
+) {
   const command = new PutObjectCommand({
     Bucket: bucket,
     Key: key,
@@ -202,7 +265,7 @@ async function putS3Object(client: S3Client, bucket: string, key: string, buffer
     ContentType: mimeType,
   });
 
-  await client.send(command);
+  await client.send(command, { abortSignal });
 }
 
 export async function createPresignedS3PutUrl(input: {
